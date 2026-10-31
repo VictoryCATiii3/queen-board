@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+.pytest_cache/
+# never commit model weights — Queen is downloaded separately
+queen_hce-4/
+*.safetensors
+*.bin
+*.pb.gz

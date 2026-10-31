@@ -1,0 +1,260 @@
+"""Queen Board — local chess server.
+
+Run:  uvicorn server.app:app --reload --port 8000
+Then open http://localhost:8000
+
+The server owns the game (python-chess validates every move). The web page
+is just a view: it asks for state, sends moves, and asks engines to play
+or analyse. Anything else (SillyTavern, an MCP server, a 3D front end) can
+drive the same API.
+"""
+from __future__ import annotations
+
+import io
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Literal
+
+import chess
+import chess.pgn
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+from .engines import ENGINES, Engine
+
+WEB = Path(__file__).resolve().parent.parent / "web"
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    yield
+    for e in _engines.values():
+        await e.stop()
+
+
+app = FastAPI(title="Queen Board", lifespan=lifespan)
+
+
+class Game:
+    def __init__(self) -> None:
+        self.board = chess.Board()
+        self.mode: Literal["hotseat", "engine"] = "hotseat"
+        self.engine_name: str | None = None
+        self.human_color: chess.Color = chess.WHITE
+        self.start_fen = chess.STARTING_FEN
+
+    def engine_to_move(self) -> bool:
+        return (
+            self.mode == "engine"
+            and not self.board.is_game_over()
+            and self.board.turn != self.human_color
+        )
+
+
+game = Game()
+_engines: dict[str, Engine] = {}
+
+
+def get_engine(name: str) -> Engine:
+    if name not in ENGINES:
+        raise HTTPException(404, f"Unknown engine '{name}'")
+    if name not in _engines:
+        _engines[name] = ENGINES[name]()
+    return _engines[name]
+
+
+def result_text(board: chess.Board) -> str | None:
+    if not board.is_game_over(claim_draw=True):
+        return None
+    outcome = board.outcome(claim_draw=True)
+    if outcome is None:
+        return None
+    if outcome.winner is None:
+        return f"Draw — {outcome.termination.name.replace('_', ' ').lower()}"
+    who = "White" if outcome.winner else "Black"
+    return f"{who} wins — {outcome.termination.name.lower()}"
+
+
+def state() -> dict:
+    b = game.board
+    replay = chess.Board(game.start_fen)
+    san = []
+    for mv in b.move_stack:
+        san.append(replay.san(mv))
+        replay.push(mv)
+    king_in_check = None
+    if b.is_check():
+        k = b.king(b.turn)
+        king_in_check = chess.square_name(k) if k is not None else None
+    return {
+        "fen": b.fen(),
+        "turn": "white" if b.turn else "black",
+        "legal": [m.uci() for m in b.legal_moves],
+        "history": san,
+        "last_move": b.move_stack[-1].uci() if b.move_stack else None,
+        "check": king_in_check,
+        "result": result_text(b),
+        "mode": game.mode,
+        "engine": game.engine_name,
+        "human_color": "white" if game.human_color else "black",
+        "engine_to_move": game.engine_to_move(),
+        "pgn": pgn(),
+    }
+
+
+def pgn() -> str:
+    g = chess.pgn.Game.from_board(game.board)
+    if game.start_fen != chess.STARTING_FEN:
+        g.headers["FEN"] = game.start_fen
+    g.headers["Event"] = "Queen Board"
+    g.headers["White"] = "Human" if game.mode == "hotseat" or game.human_color else (game.engine_name or "?")
+    g.headers["Black"] = "Human" if game.mode == "hotseat" or not game.human_color else (game.engine_name or "?")
+    buf = io.StringIO()
+    print(g, file=buf, end="")
+    return buf.getvalue()
+
+
+# ---------- API ----------
+
+class NewGame(BaseModel):
+    mode: Literal["hotseat", "engine"] = "hotseat"
+    engine: str | None = None
+    human_color: Literal["white", "black"] = "white"
+    fen: str | None = None
+
+
+class MoveIn(BaseModel):
+    uci: str
+
+
+class AnalyzeIn(BaseModel):
+    engine: str = "stockfish"
+    question: str | None = None
+
+
+class SkillIn(BaseModel):
+    level: int
+
+
+@app.get("/api/state")
+def get_state():
+    return state()
+
+
+@app.get("/api/engines")
+async def list_engines():
+    out = []
+    for name in ENGINES:
+        eng = get_engine(name)
+        ok, why = await eng.available()
+        out.append({"name": name, "available": ok, "reason": why, "explains": eng.can_explain})
+    return out
+
+
+@app.post("/api/new")
+def new_game(req: NewGame):
+    if req.mode == "engine" and not req.engine:
+        raise HTTPException(400, "Pick an engine for engine mode")
+    if req.engine:
+        get_engine(req.engine)
+    try:
+        board = chess.Board(req.fen) if req.fen else chess.Board()
+    except ValueError as e:
+        raise HTTPException(400, f"Bad FEN: {e}")
+    game.board = board
+    game.start_fen = board.fen()
+    game.mode = req.mode
+    game.engine_name = req.engine if req.mode == "engine" else None
+    game.human_color = chess.WHITE if req.human_color == "white" else chess.BLACK
+    return state()
+
+
+@app.post("/api/move")
+def make_move(req: MoveIn):
+    if game.engine_to_move():
+        raise HTTPException(409, "It's the engine's turn")
+    try:
+        mv = chess.Move.from_uci(req.uci)
+    except ValueError:
+        raise HTTPException(400, f"Not a UCI move: {req.uci}")
+    if mv not in game.board.legal_moves:
+        raise HTTPException(400, f"Illegal move: {req.uci}")
+    game.board.push(mv)
+    return state()
+
+
+@app.post("/api/engine_move")
+async def engine_move():
+    if not game.engine_to_move():
+        raise HTTPException(409, "Not the engine's turn")
+    eng = get_engine(game.engine_name)  # type: ignore[arg-type]
+    ok, why = await eng.available()
+    if not ok:
+        raise HTTPException(503, why)
+    try:
+        mv = await eng.choose_move(game.board.copy())
+    except Exception as e:  # surface engine errors to the UI
+        raise HTTPException(500, f"{eng.name} failed: {e}")
+    if mv not in game.board.legal_moves:
+        raise HTTPException(500, f"{eng.name} suggested an illegal move: {mv.uci()}")
+    game.board.push(mv)
+    return state()
+
+
+@app.post("/api/undo")
+def undo():
+    """Hotseat: take back one ply. Engine mode: take back to the human's turn."""
+    if not game.board.move_stack:
+        return state()
+    game.board.pop()
+    if game.mode == "engine" and game.board.move_stack and game.board.turn != game.human_color:
+        game.board.pop()
+    return state()
+
+
+@app.post("/api/analyze")
+async def analyze(req: AnalyzeIn):
+    eng = get_engine(req.engine)
+    ok, why = await eng.available()
+    if not ok:
+        raise HTTPException(503, why)
+    if game.board.is_game_over():
+        raise HTTPException(400, "Game is over")
+    try:
+        a = await eng.analyze(game.board.copy(), req.question)
+    except Exception as e:
+        raise HTTPException(500, f"{eng.name} failed: {e}")
+    d = a.to_dict()
+    d["engine"] = eng.name
+    # SAN versions for display (the browser doesn't know chess rules)
+    b = game.board.copy()
+    d["best_san"] = None
+    if a.best_move:
+        mv = chess.Move.from_uci(a.best_move)
+        d["best_san"] = b.san(mv) if mv in b.legal_moves else a.best_move
+    line_san = []
+    for u in a.line:
+        mv = chess.Move.from_uci(u)
+        if mv not in b.legal_moves:
+            break
+        line_san.append(b.san(mv))
+        b.push(mv)
+    d["line_san"] = line_san
+    d["fen"] = game.board.fen()
+    return d
+
+
+@app.post("/api/stockfish/skill")
+async def stockfish_skill(req: SkillIn):
+    eng = get_engine("stockfish")
+    await eng.set_skill(req.level)  # type: ignore[attr-defined]
+    return {"skill": eng.skill_level}  # type: ignore[attr-defined]
+
+
+@app.get("/")
+def index():
+    return FileResponse(WEB / "index.html")
+
+
+app.mount("/static", StaticFiles(directory=WEB), name="static")
