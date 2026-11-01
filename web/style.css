@@ -78,3 +78,8 @@ details summary { cursor: pointer; color: var(--muted); font-size: 13px; margin-
   gap: 2px 6px; max-height: 220px; overflow: auto; font-variant-numeric: tabular-nums; }
 .moves li { display: contents; }
 .moves .n { color: var(--muted); } .moves .m.last { color: var(--accent); font-weight: 600; }
+.pending { font-size: 13px; background: rgba(217,164,65,.14); border: 1px solid var(--accent); border-radius: 7px;
+  padding: 8px 10px; color: var(--ink); }
+.pending.hidden { display: none; }
+button.attention { animation: nudge 1.2s ease-in-out infinite; }
+@keyframes nudge { 50% { box-shadow: 0 0 0 4px rgba(217,164,65,.35); } }

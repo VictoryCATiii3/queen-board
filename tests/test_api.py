@@ -151,3 +151,11 @@ def test_stockfish_verify_handshake():
     from get_stockfish import works
     assert works(HERE / "fake_uci.py")
     assert not works(HERE / "does-not-exist")
+
+
+def test_state_reports_opponent_and_level():
+    c.post("/api/stockfish/skill", json={"level": 7})
+    s = c.post("/api/new", json={"mode": "engine", "engine": "stockfish", "human_color": "white"}).json()
+    assert s["mode"] == "engine" and s["engine"] == "stockfish" and s["skill"] == 7
+    assert '[Black "Stockfish (level 7)"]' in s["pgn"]
+    c.post("/api/stockfish/skill", json={"level": 20})

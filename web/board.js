@@ -130,7 +130,13 @@ function renderPanel() {
     status.textContent = `${side} to move` + (st.check ? " — check!" : "");
   }
 
-  const opp = st.mode === "hotseat" ? "Human" : (st.engine === "queen" ? "Queen 4B" : st.engine);
+  const opp = st.mode === "hotseat" ? "Human" : engineLabel(st);
+  // Always say who you're playing, so a pending opponent change can't be mistaken for the real one.
+  if (!st.result && !busy) {
+    status.textContent += st.mode === "hotseat"
+      ? " · you're playing both sides"
+      : (st.turn === st.human_color ? " · your move" : "") + ` · vs ${opp}`;
+  }
   const meTop = flipped ? "white" : "black";
   const name = (c) => st.mode === "hotseat" ? `${c} · human` : `${c} · ${c === st.human_color ? "you" : opp}`;
   $("tag-top").textContent = name(meTop);
@@ -150,6 +156,27 @@ function renderPanel() {
 
   $("undo").disabled = busy || !st.history.length;
   $("analyze").disabled = busy || !!st.result;
+  renderPending();
+}
+
+function engineLabel(s) {
+  if (s.engine === "queen") return "Queen 4B";
+  if (s.engine === "stockfish") return `Stockfish (level ${s.skill ?? "?"})`;
+  if (s.engine === "random") return "Random mover";
+  return s.engine;
+}
+
+// Opponent/colour in the controls vs. what the running game actually uses.
+function pendingChange() {
+  if (!st) return false;
+  const opp = $("opp").value;
+  if (opp === "hotseat") return st.mode !== "hotseat";
+  return st.mode !== "engine" || st.engine !== opp || st.human_color !== $("color").value;
+}
+function renderPending() {
+  const p = pendingChange();
+  $("pending").classList.toggle("hidden", !p);
+  $("new").classList.toggle("attention", p);
 }
 
 function update(newState) {
@@ -235,11 +262,34 @@ async function maybeEngineMove() {
 }
 
 // ---------- controls ----------
-$("opp").addEventListener("change", () => {
+function syncSkillVisibility() {
   $("skill-wrap").style.visibility = $("opp").value === "stockfish" ? "visible" : "hidden";
+}
+
+// Changing opponent or colour before the first move starts the game right away;
+// mid-game it waits for "New game" (and says so) instead of wiping the position.
+async function onSettingsChange() {
+  syncSkillVisibility();
+  if (busy) return;
+  if (!st.history.length || st.result) return startNewGame();
+  renderPending();
+}
+$("opp").addEventListener("change", onSettingsChange);
+$("color").addEventListener("change", onSettingsChange);
+
+// Skill applies immediately, even mid-game.
+$("skill").addEventListener("change", async () => {
+  const level = Math.max(0, Math.min(20, Math.round(+$("skill").value || 0)));
+  $("skill").value = level;
+  try {
+    await api("stockfish/skill", { level });
+    update(await api("state"));
+  } catch (e) { $("status").textContent = "Couldn't set level: " + e.message; }
 });
 
-$("new").onclick = async () => {
+$("new").onclick = () => startNewGame();
+
+async function startNewGame() {
   const opp = $("opp").value;
   const body = opp === "hotseat"
     ? { mode: "hotseat" }
@@ -251,8 +301,8 @@ $("new").onclick = async () => {
     update(await api("new", body));
     clearAnalysis();
     await maybeEngineMove();
-  } catch (e) { alert(e.message); }
-};
+  } catch (e) { $("status").textContent = "Couldn't start: " + e.message; }
+}
 $("undo").onclick = async () => { update(await api("undo", {})); };
 $("flip").onclick = () => { flipped = !flipped; draw(); renderPanel(); };
 $("copy-pgn").onclick = () => navigator.clipboard.writeText(st.pgn);
@@ -310,6 +360,12 @@ $("analyze").onclick = async () => {
       }
     }
   } catch {}
-  $("skill-wrap").style.visibility = "hidden";
-  update(await api("state"));
+  // Make the controls match the game the server is actually running.
+  const s = await api("state");
+  $("opp").value = s.mode === "hotseat" ? "hotseat" : s.engine;
+  $("color").value = s.human_color;
+  if (s.skill != null) $("skill").value = s.skill;
+  flipped = s.mode === "engine" && s.human_color === "black";
+  syncSkillVisibility();
+  update(s);
 })();

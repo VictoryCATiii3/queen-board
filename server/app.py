@@ -11,6 +11,7 @@ drive the same API.
 from __future__ import annotations
 
 import io
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
@@ -99,8 +100,24 @@ def state() -> dict:
         "engine": game.engine_name,
         "human_color": "white" if game.human_color else "black",
         "engine_to_move": game.engine_to_move(),
+        "skill": _stockfish_skill(),
         "pgn": pgn(),
     }
+
+
+def _stockfish_skill() -> int | None:
+    eng = _engines.get("stockfish")
+    if eng is not None:
+        return eng.skill_level  # type: ignore[attr-defined]
+    return int(os.environ.get("STOCKFISH_SKILL", "20"))
+
+
+def _player(color: chess.Color) -> str:
+    if game.mode == "hotseat" or color == game.human_color:
+        return "Human"
+    if game.engine_name == "stockfish":
+        return f"Stockfish (level {_stockfish_skill()})"
+    return game.engine_name or "?"
 
 
 def pgn() -> str:
@@ -108,8 +125,8 @@ def pgn() -> str:
     if game.start_fen != chess.STARTING_FEN:
         g.headers["FEN"] = game.start_fen
     g.headers["Event"] = "Queen Board"
-    g.headers["White"] = "Human" if game.mode == "hotseat" or game.human_color else (game.engine_name or "?")
-    g.headers["Black"] = "Human" if game.mode == "hotseat" or not game.human_color else (game.engine_name or "?")
+    g.headers["White"] = _player(chess.WHITE)
+    g.headers["Black"] = _player(chess.BLACK)
     buf = io.StringIO()
     print(g, file=buf, end="")
     return buf.getvalue()
