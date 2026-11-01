@@ -25,6 +25,7 @@ import json
 import os
 import re
 import shlex
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -61,6 +62,16 @@ class QueenEngine(Engine):
         self._lock = asyncio.Lock()  # one GPU job at a time
 
     async def available(self) -> tuple[bool, str]:
+        # The official runner is vLLM + CUDA only and exits without a GPU, so on
+        # Windows (or with QUEEN_DISABLE=1) don't even try unless the user has
+        # supplied their own QUEEN_CMD.
+        if os.environ.get("QUEEN_DISABLE") == "1" or (
+            sys.platform == "win32" and "QUEEN_CMD" not in os.environ
+        ):
+            return False, (
+                "Queen's official runner needs Linux + an NVIDIA GPU with BF16 "
+                "(vLLM/CUDA). It has no CPU mode, so it's off on this machine."
+            )
         if not (self.dir / "infer.py").exists():
             return False, f"Queen's infer.py not found in {self.dir} (set QUEEN_DIR)."
         return True, ""
@@ -78,7 +89,8 @@ class QueenEngine(Engine):
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
             json.dump(history, fh)
             hist_path = fh.name
-        cmd = self.cmd.replace("{fen}", board.fen()).replace("{history}", shlex.quote(hist_path))
+        quoted = f'"{hist_path}"' if os.name == "nt" else shlex.quote(hist_path)
+        cmd = self.cmd.replace("{fen}", board.fen()).replace("{history}", quoted)
         try:
             return await self._run(board, cmd, question)
         finally:
@@ -86,12 +98,18 @@ class QueenEngine(Engine):
 
     async def _run(self, board: chess.Board, cmd: str, question: str | None) -> Analysis:
         async with self._lock:
-            proc = await asyncio.create_subprocess_exec(
-                *shlex.split(cmd),
-                cwd=self.dir,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
+            if os.name == "nt":  # let cmd.exe handle Windows quoting/paths
+                proc = await asyncio.create_subprocess_shell(
+                    cmd, cwd=self.dir,
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                )
+            else:
+                proc = await asyncio.create_subprocess_exec(
+                    *shlex.split(cmd),
+                    cwd=self.dir,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
             try:
                 out, err = await asyncio.wait_for(proc.communicate(), self.timeout)
             except asyncio.TimeoutError:

@@ -1,4 +1,5 @@
 """Run:  pytest -q   (from the repo root)"""
+import asyncio
 import json
 import os
 import sys
@@ -10,6 +11,7 @@ os.chmod(HERE / "fake_uci.py", 0o755)
 sys.path.insert(0, str(HERE.parent))
 
 import chess  # noqa: E402
+import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 from server.app import app  # noqa: E402
@@ -76,6 +78,7 @@ def test_engines_listing():
     assert names == {"random", "stockfish", "queen"}
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Queen is off on Windows")
 def test_queen_subprocess_with_fake_infer(tmp_path, monkeypatch):
     """Fake queen_hce-4 folder: checks flags, history file and JSON parsing end to end."""
     (tmp_path / ".venv/bin").mkdir(parents=True)
@@ -98,3 +101,53 @@ def test_queen_subprocess_with_fake_infer(tmp_path, monkeypatch):
     assert len(s["history"]) == 2
     a = c.post("/api/analyze", json={"engine": "queen"}).json()
     assert a["text"] == "history=2" and a["best_san"]
+
+
+def test_queen_is_off_on_windows(monkeypatch):
+    from server.engines.queen import QueenEngine
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.delenv("QUEEN_CMD", raising=False)
+    ok, why = asyncio.run(QueenEngine().available())
+    assert not ok and "CPU" in why
+
+
+def test_queen_disable_flag(monkeypatch):
+    from server.engines.queen import QueenEngine
+    monkeypatch.setenv("QUEEN_DISABLE", "1")
+    ok, _ = asyncio.run(QueenEngine().available())
+    assert not ok
+
+
+def test_stockfish_found_in_repo_bin(tmp_path, monkeypatch):
+    import server.engines.stockfish as sf
+    exe = tmp_path / "stockfish" / "stockfish-ubuntu-x86-64"
+    exe.parent.mkdir()
+    exe.write_text("#!/bin/sh\n")
+    exe.chmod(0o755)
+    monkeypatch.setattr(sf, "REPO_BIN", tmp_path)
+    monkeypatch.delenv("STOCKFISH_PATH", raising=False)
+    found = sf._find_binary()
+    assert found and found.endswith("stockfish-ubuntu-x86-64")
+
+
+def test_stockfish_asset_picking():
+    sys.path.insert(0, str(HERE.parent / "tools"))
+    from get_stockfish import pick_assets
+    old_style = ["stockfish-windows-x86-64-avx2.zip", "stockfish-windows-x86-64.zip",
+                 "stockfish-windows-x86-64-avx512.zip", "stockfish-ubuntu-x86-64-avx2.tar",
+                 "stockfish-macos-m1-apple-silicon.tar"]
+    assert pick_assets(old_style, "nt", "AMD64", avx2=True)[:2] == [
+        "stockfish-windows-x86-64.zip", "stockfish-windows-x86-64-avx2.zip"]
+    assert pick_assets(old_style, "nt", "AMD64", avx2=False)[-1] == "stockfish-windows-x86-64-avx2.zip"
+    assert pick_assets(old_style, "linux", "x86_64", avx2=True) == ["stockfish-ubuntu-x86-64-avx2.tar"]
+    assert pick_assets(old_style, "darwin", "arm64", avx2=False) == ["stockfish-macos-m1-apple-silicon.tar"]
+    universal = ["stockfish-windows.zip", "stockfish-linux.tar", "stockfish-windows-arm64.zip"]
+    assert pick_assets(universal, "nt", "AMD64", avx2=True) == ["stockfish-windows.zip"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="runs a .py via shebang")
+def test_stockfish_verify_handshake():
+    sys.path.insert(0, str(HERE.parent / "tools"))
+    from get_stockfish import works
+    assert works(HERE / "fake_uci.py")
+    assert not works(HERE / "does-not-exist")

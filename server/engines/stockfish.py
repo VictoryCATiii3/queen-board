@@ -1,23 +1,35 @@
-"""Stockfish (or any UCI engine) via python-chess.
+"""Stockfish (or any UCI engine) via python-chess. Runs entirely on the CPU.
 
-Set STOCKFISH_PATH if the binary isn't on your PATH as `stockfish`.
-On Ubuntu:  sudo apt install stockfish   (installs to /usr/games/stockfish)
+Where it looks, in order:
+  1. STOCKFISH_PATH
+  2. <repo>/bin/stockfish/**  (run.bat downloads it there on Windows)
+  3. `stockfish` on PATH, /usr/games/stockfish  (Ubuntu: sudo apt install stockfish)
+
+Tuning: STOCKFISH_THREADS (default: half your CPU cores), STOCKFISH_HASH (MB, default 128).
 """
 from __future__ import annotations
 
 import os
 import shutil
+import sys
+from pathlib import Path
 
 import chess
 import chess.engine
 
 from .base import Analysis, Engine
 
+REPO_BIN = Path(__file__).resolve().parents[2] / "bin" / "stockfish"
+
 
 def _find_binary() -> str | None:
     env = os.environ.get("STOCKFISH_PATH")
     if env:
         return env if os.path.exists(env) else None
+    if REPO_BIN.exists():
+        for p in sorted(REPO_BIN.rglob("stockfish*")):
+            if p.is_file() and (p.suffix.lower() == ".exe" or (os.name != "nt" and os.access(p, os.X_OK))):
+                return str(p)
     return shutil.which("stockfish") or (
         "/usr/games/stockfish" if os.path.exists("/usr/games/stockfish") else None
     )
@@ -44,9 +56,19 @@ class StockfishEngine(Engine):
     async def start(self) -> None:
         if self._engine or not self.path:
             return
-        self._transport, self._engine = await chess.engine.popen_uci(self.path)
+        # A .py path (the test suite's fake engine) runs with this Python.
+        cmd = [sys.executable, self.path] if self.path.endswith(".py") else self.path
+        self._transport, self._engine = await chess.engine.popen_uci(cmd)
+        opts: dict = {}
         if "Skill Level" in self._engine.options:
-            await self._engine.configure({"Skill Level": self.skill_level})
+            opts["Skill Level"] = self.skill_level
+        if "Threads" in self._engine.options:
+            default = max(1, (os.cpu_count() or 2) // 2)
+            opts["Threads"] = int(os.environ.get("STOCKFISH_THREADS", default))
+        if "Hash" in self._engine.options:
+            opts["Hash"] = int(os.environ.get("STOCKFISH_HASH", "128"))
+        if opts:
+            await self._engine.configure(opts)
 
     async def stop(self) -> None:
         if self._engine:

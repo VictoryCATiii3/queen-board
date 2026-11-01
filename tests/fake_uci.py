@@ -8,7 +8,7 @@ board = chess.Board()
 for line in sys.stdin:
     cmd = line.strip()
     if cmd == "uci":
-        print("id name FakeUCI\noption name Skill Level type spin default 20 min 0 max 20\nuciok", flush=True)
+        print("id name FakeUCI\noption name Skill Level type spin default 20 min 0 max 20\noption name Threads type spin default 1 min 1 max 1024\noption name Hash type spin default 16 min 1 max 33554432\nuciok", flush=True)
     elif cmd == "isready":
         print("readyok", flush=True)
     elif cmd.startswith("position"):

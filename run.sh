@@ -1,11 +1,38 @@
 #!/usr/bin/env bash
-# Start Queen Board on http://localhost:8000
-# Usage: ./run.sh            (uses ~/Workspace/QUEEN for Queen)
-#        QUEEN_DIR=/path/to/queen_hce-4 ./run.sh
+# Queen Board launcher for Linux/macOS → http://localhost:8000
+# Everything installs into .venv in this folder. Nothing global.
+#
+#   ./run.sh                                   Queen from ~/Workspace/QUEEN
+#   QUEEN_DIR=/path/to/queen_hce-4 ./run.sh
+#   CPU_ONLY=1 ./run.sh                        hide GPUs, Queen off
 set -euo pipefail
 cd "$(dirname "$0")"
-if [ ! -d .venv ]; then
-  python3 -m venv .venv
-  .venv/bin/pip install -q -r requirements.txt
+
+export PIP_REQUIRE_VIRTUALENV=true          # never let pip touch the global Python
+export PIP_DISABLE_PIP_VERSION_CHECK=1
+if [ "${CPU_ONLY:-0}" = "1" ]; then
+  export CUDA_VISIBLE_DEVICES=-1 QUEEN_DISABLE=1
 fi
-exec .venv/bin/uvicorn server.app:app --host "${HOST:-127.0.0.1}" --port "${PORT:-8000}"
+
+PY=${PYTHON:-python3}
+if ! "$PY" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null; then
+  echo "Python 3.10+ is required (set PYTHON=/path/to/python3.x)." >&2; exit 1
+fi
+
+if [ ! -x .venv/bin/python ]; then
+  echo "Creating virtual environment in .venv ..."
+  "$PY" -m venv .venv || { echo "venv failed. On Ubuntu: sudo apt install python3-venv" >&2; exit 1; }
+fi
+if ! cmp -s requirements.txt .venv/requirements.installed; then
+  echo "Installing packages into .venv ..."
+  .venv/bin/python -m pip install --upgrade pip >/dev/null
+  .venv/bin/python -m pip install -r requirements.txt
+  cp requirements.txt .venv/requirements.installed
+fi
+
+.venv/bin/python tools/get_stockfish.py     # uses system Stockfish if present
+
+echo
+echo "  Queen Board is running at http://${HOST:-127.0.0.1}:${PORT:-8000}  (Ctrl+C to stop)"
+echo
+exec .venv/bin/python -m uvicorn server.app:app --host "${HOST:-127.0.0.1}" --port "${PORT:-8000}"

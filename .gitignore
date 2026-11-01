@@ -8,3 +8,4 @@ queen_hce-4/
 *.safetensors
 *.bin
 *.pb.gz
+bin/

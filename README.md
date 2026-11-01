@@ -13,9 +13,21 @@ This is stage 1 of a bigger plan:
 
 ## Quick start
 
+Both launchers create a `.venv` in this folder and install everything there.
+Nothing is installed globally (`PIP_REQUIRE_VIRTUALENV` is set while they run).
+They also download Stockfish into `bin/stockfish/` if it isn't already
+installed, and only reinstall packages when `requirements.txt` changes.
+
+**Windows (CPU only):** double-click `run.bat`. It needs Python 3.10+ from
+python.org. The browser opens on http://127.0.0.1:8000. It hides GPUs
+(`CUDA_VISIBLE_DEVICES=-1`) and turns Queen off. Stockfish uses half your CPU
+cores by default (`set STOCKFISH_THREADS=8` to change).
+
+**Linux / macOS:**
+
 ```bash
-sudo apt install stockfish        # optional, for the Stockfish opponent
-./run.sh                          # → http://localhost:8000
+./run.sh                          # Queen from ~/Workspace/QUEEN if present
+CPU_ONLY=1 ./run.sh               # same CPU-only setup as run.bat
 ```
 
 Pick an opponent: **Nobody** (play both sides), **Random mover**, **Stockfish**
@@ -38,8 +50,19 @@ QUEEN_DIR=~/Workspace/QUEEN/queen_hce-4 ./run.sh
 | `QUEEN_CMD` | `.venv/bin/python infer.py --fen "{fen}" --history {history} --gpu-memory-utilization 0.35` | Command template |
 | `QUEEN_TIMEOUT` | `600` | Seconds before giving up |
 | `QUEEN_DEBUG` | unset | Set to `1` to see the stdout tail in the panel |
-| `STOCKFISH_PATH` | `stockfish` on PATH | Stockfish binary |
+| `QUEEN_DISABLE` | unset | `1` turns Queen off (run.bat sets this) |
+| `STOCKFISH_PATH` | `bin/stockfish/`, then PATH | Stockfish binary |
 | `STOCKFISH_TIME` | `0.5` | Seconds per Stockfish move |
+| `STOCKFISH_THREADS` | half your CPU cores | CPU threads Stockfish uses |
+| `STOCKFISH_HASH` | `128` | Stockfish hash table, MB |
+| `SKIP_STOCKFISH` | unset | `1` = don't download Stockfish |
+
+**Why Queen is off on Windows / CPU:** the official `infer.py` runs on vLLM,
+pins CUDA 13 packages, and exits with "CPU inference is not supported by this
+runner" when there's no CUDA. Running Queen on a CPU would mean porting its
+custom encoder + cross-attention model to plain PyTorch, which is a separate
+project. (On Windows, Queen only turns on if you supply your own `QUEEN_CMD` and
+don't use run.bat, e.g. to call a Queen running elsewhere.)
 
 Notes:
 - `{history}` is a temp JSON file of earlier FENs. Queen uses game history, so
@@ -76,7 +99,7 @@ optionally `choose_move()`), register it in `server/engines/__init__.py`.
 ## Tests
 
 ```bash
-.venv/bin/pytest -q
+.venv/bin/python -m pytest -q        # Windows: .venv\Scripts\python -m pytest -q
 ```
 
 Tests use a fake UCI engine and a fake `infer.py`, so they run without a GPU.
