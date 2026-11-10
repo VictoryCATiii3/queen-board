@@ -143,3 +143,32 @@ def test_queen_unavailable_message(monkeypatch):
     monkeypatch.setenv("QUEEN_URL", "http://127.0.0.1:9")  # nothing listens here
     ok, why = asyncio.run(QueenEngine().available())
     assert not ok and "queen serve" in why
+
+
+def test_queen_move_comes_with_reasoning(fake_queen):
+    c.post("/api/new", json={"mode": "engine", "engine": "queen"})
+    c.post("/api/move", json={"uci": "e2e4"})
+    s = c.post("/api/engine_move", json={}).json()
+    ex = s["engine_explanation"]
+    assert ex["ply"] == 2 and ex["best_san"] and "history=1" in ex["text"]
+    assert len(fake_queen) == 1  # one call gives both the move and the reasoning
+    s = c.post("/api/undo", json={}).json()
+    assert s["engine_explanation"] is None
+
+
+def test_outcome_for_banner():
+    s = c.post("/api/new", json={"mode": "hotseat"}).json()
+    assert s["outcome"] is None
+    for m in ["f2f3", "e7e5", "g2g4", "d8h4"]:  # fool's mate
+        s = c.post("/api/move", json={"uci": m}).json()
+    assert s["outcome"] == {"winner": "black", "reason": "checkmate"}
+
+
+def test_question_echo_is_checked():
+    board = chess.Board()
+    ok = parse_queen_reply(board, {"best_move_uci": "e2e4", "text": "x",
+                                   "raw": {"inference_settings": {"prompt": "why?"}}}, "why?")
+    assert "received your question" in ok.text
+    bad = parse_queen_reply(board, {"best_move_uci": "e2e4", "text": "x",
+                                    "raw": {"inference_settings": {"prompt": "Analyze..."}}}, "why?")
+    assert "Warning" in bad.text

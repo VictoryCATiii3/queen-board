@@ -179,9 +179,42 @@ function renderPending() {
   $("new").classList.toggle("attention", p);
 }
 
+let shownExplanationPly = null;  // which engine move's reasoning is in the panel
+let resultSeen = null;           // fen of the finished game whose banner was dismissed
+
 function update(newState) {
   st = newState; selected = null; arrows = []; draw(); renderPanel();
+  showEngineExplanation();
+  renderGameOver();
 }
+
+// When Queen plays a move, show why, without anyone having to ask.
+function showEngineExplanation() {
+  const ex = st.engine_explanation;
+  if (!ex) { shownExplanationPly = null; return; }
+  if (ex.ply === shownExplanationPly) return;
+  shownExplanationPly = ex.ply;
+  const label = ex.engine === "queen" ? "Queen" : ex.engine;
+  renderAnalysis(ex, `${label} played ${ex.best_san || ex.best_move}. Here's why:`, false);
+}
+
+// Big, impossible-to-miss result banner over the board.
+function renderGameOver() {
+  const box = $("gameover");
+  const o = st.outcome;
+  if (!o || resultSeen === st.fen) { box.classList.add("hidden"); return; }
+  let title, cls;
+  if (o.winner === null) { title = "Draw"; cls = "draw"; }
+  else if (st.mode === "hotseat") { title = `${o.winner === "white" ? "White" : "Black"} wins`; cls = "win"; }
+  else if (o.winner === st.human_color) { title = "You win!"; cls = "win"; }
+  else { title = "You lose"; cls = "lose"; }
+  const opp = st.mode === "hotseat" ? "" : ` against ${engineLabel(st)}`;
+  $("go-title").textContent = title;
+  $("go-sub").textContent = `${o.reason[0].toUpperCase()}${o.reason.slice(1)}${opp} · on move ${st.fen.split(" ")[5] || "?"}`;
+  box.className = `gameover ${cls}`;
+}
+$("go-new").onclick = () => { $("gameover").classList.add("hidden"); startNewGame(); };
+$("go-review").onclick = () => { resultSeen = st.fen; $("gameover").classList.add("hidden"); };
 
 // ---------- input ----------
 function eventSquare(ev) {
@@ -303,7 +336,7 @@ async function startNewGame() {
     await maybeEngineMove();
   } catch (e) { $("status").textContent = "Couldn't start: " + e.message; }
 }
-$("undo").onclick = async () => { update(await api("undo", {})); };
+$("undo").onclick = async () => { resultSeen = null; update(await api("undo", {})); };
 $("flip").onclick = () => { flipped = !flipped; draw(); renderPanel(); };
 $("copy-pgn").onclick = () => navigator.clipboard.writeText(st.pgn);
 $("copy-fen").onclick = () => navigator.clipboard.writeText(st.fen);
@@ -313,15 +346,12 @@ function clearAnalysis() {
   box.textContent = "Ask an engine about the current position. Its best move and line are drawn as arrows.";
 }
 
-$("analyze").onclick = async () => {
-  const engine = $("an-engine").value, question = $("question").value.trim() || null;
-  const box = $("analysis"); box.className = "analysis"; box.textContent = `Asking ${engine}…`;
-  const fenAtAsk = st.fen;
-  $("analyze").disabled = true;
-  try {
-    const d = await api("analyze", { engine, question });
-    if (st.fen !== fenAtAsk) return; // position changed while waiting
-    box.innerHTML = "";
+// Shared by "Analyze position" and by Queen explaining its own moves.
+// drawArrows=false for an engine's own move: its line starts from the position
+// before that move, so arrows on the current board would point the wrong way.
+function renderAnalysis(d, heading, drawArrows = true) {
+    const box = $("analysis"); box.className = "analysis"; box.innerHTML = "";
+    if (heading) { const h = document.createElement("div"); h.className = "heading"; h.textContent = heading; box.appendChild(h); }
     const best = document.createElement("div"); best.className = "best";
     let ev = "";
     if (d.mate_in != null) ev = ` · mate in ${Math.abs(d.mate_in)} for ${d.mate_in > 0 ? "White" : "Black"}`;
@@ -338,12 +368,24 @@ $("analyze").onclick = async () => {
       const pre = document.createElement("pre"); pre.textContent = JSON.stringify(d.raw, null, 1);
       det.appendChild(pre); box.appendChild(det);
     }
+    if (!drawArrows) return;
     const line = d.line && d.line.length ? d.line : (d.best_move ? [d.best_move] : []);
     arrows = line.slice(0, 3).map((m, i) => ({
       from: m.slice(0, 2), to: m.slice(2, 4), alpha: [0.9, 0.5, 0.35][i],
       color: i % 2 ? "rgb(70,140,220)" : "rgb(230,160,40)",
     }));
     draw();
+}
+
+$("analyze").onclick = async () => {
+  const engine = $("an-engine").value, question = $("question").value.trim() || null;
+  const box = $("analysis"); box.className = "analysis"; box.textContent = `Asking ${engine}…`;
+  const fenAtAsk = st.fen;
+  $("analyze").disabled = true;
+  try {
+    const d = await api("analyze", { engine, question });
+    if (st.fen !== fenAtAsk) return; // position changed while waiting
+    renderAnalysis(d, null, true);
   } catch (e) {
     box.innerHTML = `<span class="err">${e.message.replace(/</g, "&lt;")}</span>`;
   } finally { $("analyze").disabled = busy || !!st.result; }

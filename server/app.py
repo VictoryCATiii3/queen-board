@@ -44,6 +44,8 @@ class Game:
         self.engine_name: str | None = None
         self.human_color: chess.Color = chess.WHITE
         self.start_fen = chess.STARTING_FEN
+        # Why the engine made its last move (engines that can explain, i.e. Queen).
+        self.engine_explanation: dict | None = None
 
     def engine_to_move(self) -> bool:
         return (
@@ -77,6 +79,40 @@ def result_text(board: chess.Board) -> str | None:
     return f"{who} wins — {outcome.termination.name.lower()}"
 
 
+def outcome_info(board: chess.Board) -> dict | None:
+    """Structured result so the UI can say "You win" / "You lose" / "Draw"."""
+    if not board.is_game_over(claim_draw=True):
+        return None
+    outcome = board.outcome(claim_draw=True)
+    if outcome is None:
+        return None
+    return {
+        "winner": None if outcome.winner is None else ("white" if outcome.winner else "black"),
+        "reason": outcome.termination.name.replace("_", " ").lower(),
+    }
+
+
+def analysis_payload(board: chess.Board, a, eng_name: str) -> dict:
+    """An engine Analysis plus SAN versions for display (the browser doesn't know chess rules)."""
+    d = a.to_dict()
+    d["engine"] = eng_name
+    b = board.copy()
+    d["best_san"] = None
+    if a.best_move:
+        mv = chess.Move.from_uci(a.best_move)
+        d["best_san"] = b.san(mv) if mv in b.legal_moves else a.best_move
+    line_san = []
+    for u in a.line:
+        mv = chess.Move.from_uci(u)
+        if mv not in b.legal_moves:
+            break
+        line_san.append(b.san(mv))
+        b.push(mv)
+    d["line_san"] = line_san
+    d["fen"] = board.fen()
+    return d
+
+
 def state() -> dict:
     b = game.board
     replay = chess.Board(game.start_fen)
@@ -96,6 +132,8 @@ def state() -> dict:
         "last_move": b.move_stack[-1].uci() if b.move_stack else None,
         "check": king_in_check,
         "result": result_text(b),
+        "outcome": outcome_info(b),
+        "engine_explanation": game.engine_explanation,
         "mode": game.mode,
         "engine": game.engine_name,
         "human_color": "white" if game.human_color else "black",
@@ -184,6 +222,7 @@ def new_game(req: NewGame):
     game.mode = req.mode
     game.engine_name = req.engine if req.mode == "engine" else None
     game.human_color = chess.WHITE if req.human_color == "white" else chess.BLACK
+    game.engine_explanation = None
     return state()
 
 
@@ -209,13 +248,25 @@ async def engine_move():
     ok, why = await eng.available()
     if not ok:
         raise HTTPException(503, why)
+    before = game.board.copy()
+    explanation = None
     try:
-        mv = await eng.choose_move(game.board.copy())
+        if eng.can_explain:
+            # One call gives both the move and the reasoning behind it; keep both.
+            a = await eng.analyze(before.copy())
+            if not a.best_move:
+                raise RuntimeError("returned no move")
+            mv = chess.Move.from_uci(a.best_move)
+            explanation = analysis_payload(before, a, eng.name)
+            explanation["ply"] = len(before.move_stack) + 1
+        else:
+            mv = await eng.choose_move(before.copy())
     except Exception as e:  # surface engine errors to the UI
         raise HTTPException(500, f"{eng.name} failed: {e}")
     if mv not in game.board.legal_moves:
         raise HTTPException(500, f"{eng.name} suggested an illegal move: {mv.uci()}")
     game.board.push(mv)
+    game.engine_explanation = explanation
     return state()
 
 
@@ -227,6 +278,9 @@ def undo():
     game.board.pop()
     if game.mode == "engine" and game.board.move_stack and game.board.turn != game.human_color:
         game.board.pop()
+    ex = game.engine_explanation
+    if ex and ex.get("ply", 0) > len(game.board.move_stack):
+        game.engine_explanation = None  # that move was taken back
     return state()
 
 
@@ -242,24 +296,7 @@ async def analyze(req: AnalyzeIn):
         a = await eng.analyze(game.board.copy(), req.question)
     except Exception as e:
         raise HTTPException(500, f"{eng.name} failed: {e}")
-    d = a.to_dict()
-    d["engine"] = eng.name
-    # SAN versions for display (the browser doesn't know chess rules)
-    b = game.board.copy()
-    d["best_san"] = None
-    if a.best_move:
-        mv = chess.Move.from_uci(a.best_move)
-        d["best_san"] = b.san(mv) if mv in b.legal_moves else a.best_move
-    line_san = []
-    for u in a.line:
-        mv = chess.Move.from_uci(u)
-        if mv not in b.legal_moves:
-            break
-        line_san.append(b.san(mv))
-        b.push(mv)
-    d["line_san"] = line_san
-    d["fen"] = game.board.fen()
-    return d
+    return analysis_payload(game.board, a, eng.name)
 
 
 @app.post("/api/stockfish/skill")

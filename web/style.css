@@ -83,3 +83,17 @@ details summary { cursor: pointer; color: var(--muted); font-size: 13px; margin-
 .pending.hidden { display: none; }
 button.attention { animation: nudge 1.2s ease-in-out infinite; }
 @keyframes nudge { 50% { box-shadow: 0 0 0 4px rgba(217,164,65,.35); } }
+
+/* game over banner */
+.gameover { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  background: rgba(10, 8, 6, .55); backdrop-filter: blur(2px); animation: go-in .35s ease-out; }
+.gameover.hidden { display: none; }
+.go-card { background: var(--panel); border: 2px solid var(--accent); border-radius: 14px; padding: 26px 34px;
+  text-align: center; box-shadow: 0 18px 60px rgba(0,0,0,.6); min-width: 260px; }
+.go-title { font-size: 44px; font-weight: 800; letter-spacing: .02em; color: var(--accent); }
+.gameover.win .go-title { color: #8fd47a; } .gameover.win .go-card { border-color: #8fd47a; }
+.gameover.lose .go-title { color: #e2786b; } .gameover.lose .go-card { border-color: #e2786b; }
+.go-sub { color: var(--muted); margin: 6px 0 16px; }
+.go-card .buttons { justify-content: center; }
+@keyframes go-in { from { opacity: 0; transform: scale(.96); } to { opacity: 1; transform: none; } }
+.analysis .heading { color: var(--muted); font-size: 13px; margin-bottom: 4px; }

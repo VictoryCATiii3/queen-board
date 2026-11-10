@@ -112,10 +112,20 @@ def parse_queen_reply(board: chess.Board, data: dict[str, Any], question: str | 
     if "random" in str(data.get("move_source", "")).lower():
         a.text = ("Warning: QUEEN's answer couldn't be parsed, so it fell back to a "
                   "random legal move.\n\n" + a.text)
+    settings = (data.get("raw") or {}).get("inference_settings") or {}
+    received = settings.get("prompt")
+    a.raw["prompt_received"] = received
     if question:
-        a.text = (f"(Experimental: your question was sent to QUEEN as its prompt. It was "
-                  f"trained on one fixed analysis prompt, so free-form answers may be rough.)\n\n"
-                  + a.text)
+        if received == question:
+            note = (f"QUEEN received your question as its prompt: \"{received}\". It was trained "
+                    "on a single fixed analysis prompt, so it often answers with its standard "
+                    "analysis anyway.")
+        elif received is not None:
+            note = (f"Warning: you asked \"{question}\" but QUEEN received \"{received}\". "
+                    "Your queen-portable may be out of date.")
+        else:
+            note = "Your question was sent, but the QUEEN server didn't report what prompt it used."
+        a.text = f"({note})\n\n" + a.text
     return a
 
 
