@@ -1,0 +1,25 @@
+[project]
+name = "queen-portable"
+version = "0.3.0"
+description = "Unofficial tools to run Princeton's QUEEN chess model on more hardware"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+dependencies = [
+    "chess>=1.11",
+    "huggingface-hub>=1.0",
+]
+
+[project.optional-dependencies]
+torch = ["torch>=2.6", "transformers>=5.0", "accelerate>=1.0", "safetensors"]
+quant = ["bitsandbytes>=0.45"]
+dev = ["pytest"]
+
+[project.scripts]
+queen = "queen_portable.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["queen_portable*"]

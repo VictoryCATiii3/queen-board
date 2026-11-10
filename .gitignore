@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+*.egg-info/
+# never commit model files
+*.safetensors
+*.pt
+*.bin
+queen_pawn-8/
+queen_hce-4/
