@@ -15,7 +15,7 @@ model goes to them:
 | System | Launcher | Status |
 |---|---|---|
 | Linux (NVIDIA GPU recommended) | `queen_runner_linux.sh` | tested |
-| macOS (Apple Silicon, 16 GB+) | `queen_runner_mac.sh` | coming next |
+| macOS (Apple Silicon, 16 GB+) | `queen_runner_mac.sh` or double-click `Queen Board.command` | in testing |
 | Windows | `run.bat` | untested; board + Stockfish only for now |
 
 **Linux:** open a terminal in this folder and run
@@ -27,6 +27,12 @@ model goes to them:
 or double-click it in your file manager and choose *Run* (some file managers need
 right-click > *Run as a Program*). It opens its own terminal window.
 
+**macOS:** double-click **Queen Board.command**, or in Terminal run `./queen_runner_mac.sh`.
+The first time, macOS may refuse to open a file downloaded from the internet: right-click
+it, choose *Open*, then *Open* again. If your Mac's Python is older than 3.10 (macOS ships
+3.9), the launcher fetches a private Python into `.tools/` in this folder. QUEEN runs on
+the Apple GPU and needs macOS 14+ and an M1 or newer; otherwise it falls back to the CPU.
+
 The first run takes a while: it creates a private Python environment in `.venv`,
 installs PyTorch (a few GB), downloads Stockfish, and downloads QUEEN (~8.4 GB, into the
 standard Hugging Face cache). Then it opens the board in your browser. Later runs start
@@ -34,7 +40,8 @@ in seconds. Nothing is installed outside this folder except the model download.
 Press Ctrl+C or close the terminal window to stop.
 
 **Hardware:** QUEEN runs best on an NVIDIA GPU with 10 GB+ of memory (RTX 3080/3090/4080
-and up). Without one it runs on the CPU, which works but can take minutes per move.
+and up) or an Apple Silicon Mac with 16 GB+. Without either it runs on the CPU, which works
+but can take minutes per move.
 
 ## Using it
 
