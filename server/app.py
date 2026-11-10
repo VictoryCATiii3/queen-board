@@ -29,6 +29,10 @@ WEB = Path(__file__).resolve().parent.parent / "web"
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    # The launcher sets QUEEN_PRELOAD=1 so the model loads while you look at the board,
+    # instead of on Queen's first move.
+    if os.environ.get("QUEEN_PRELOAD") == "1":
+        await get_engine("queen").warm_up()
     yield
     for e in _engines.values():
         await e.stop()

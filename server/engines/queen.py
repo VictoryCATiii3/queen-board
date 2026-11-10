@@ -1,25 +1,26 @@
-"""Queen adapter: talks to a running `queen serve` (from queen-portable).
+"""Queen adapter. QUEEN can run in one of two places, behind the same interface:
 
-The board never loads the model itself. QUEEN runs as its own small server,
-on this machine or another one on your network (e.g. the GPU box), and this
-adapter just sends it positions. That keeps the board light enough for any
-computer, and lets Mac/Windows/CPU-only machines use QUEEN running elsewhere.
+  in this process (default)   The board loads QUEEN itself the first time it's
+                              needed, via queen_portable. One program, one terminal.
+  on another machine          Set QUEEN_URL to a running `queen serve`, e.g. the GPU
+                              box on your network. The board then only sends positions
+                              over HTTP, so it can run on any computer.
 
-Start QUEEN first:   queen serve                      (same machine)
-                     queen serve --host 0.0.0.0       (reachable from other machines)
+Settings (environment variables):
 
-Configure with environment variables:
-
-  QUEEN_URL      where `queen serve` is listening. Default http://127.0.0.1:8765
-  QUEEN_TIMEOUT  seconds to wait for one analysis (default 600)
-  QUEEN_DEBUG=1  include the full server reply in the analysis "raw" field
+  QUEEN_URL      use a remote `queen serve` instead of loading QUEEN here
+  QUEEN_TIMEOUT  seconds to wait for one remote analysis (default 600)
+  QUEEN_DEBUG=1  include QUEEN's full reply in the analysis "raw" field
+  QUEEN_MODEL, QUEEN_DEVICE, QUEEN_QUANTIZE, QUEEN_MODEL_DIR   passed to queen_portable
 """
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
 import os
 import re
+import threading
 import urllib.error
 import urllib.request
 from typing import Any
@@ -34,22 +35,57 @@ _UCI_RE = re.compile(r"\b([a-h][1-8][a-h][1-8][qrbn]?)\b")
 _EVAL_RE = re.compile(r"EVALUATION:\s*([+-]?)\s*(M)?\s*(\d+(?:\.\d+)?)", re.I)
 
 
-class QueenEngine(Engine):
-    name = "queen"
-    can_explain = True
+# -- where QUEEN runs ---------------------------------------------------------------
+# Both transports take the same request dict and return queen_portable's Analysis dict.
+
+class LocalQueen:
+    """Loads QUEEN into this process on first use (and keeps it loaded)."""
+
+    where = "this computer"
 
     def __init__(self) -> None:
-        self.url = os.environ.get("QUEEN_URL", "http://127.0.0.1:8765").rstrip("/")
-        self.timeout = float(os.environ.get("QUEEN_TIMEOUT", "600"))
-        self._lock = asyncio.Lock()  # the server handles one position at a time anyway
+        self._backend = None
+        self._load_lock = threading.Lock()
 
-    # -- plumbing ---------------------------------------------------------------
-    def _get(self, path: str, timeout: float) -> dict:
-        with urllib.request.urlopen(self.url + path, timeout=timeout) as r:
-            return json.loads(r.read())
+    def available(self) -> tuple[bool, str]:
+        missing = [m for m in ("torch", "transformers") if importlib.util.find_spec(m) is None]
+        if missing:
+            return False, ("QUEEN's model packages aren't installed here "
+                           f"({', '.join(missing)} missing). Use the launcher script, or set "
+                           "QUEEN_URL to a QUEEN running on another machine.")
+        return True, ""
 
-    def _post(self, path: str, payload: dict) -> dict:
-        req = urllib.request.Request(self.url + path, data=json.dumps(payload).encode(),
+    def _load(self):
+        with self._load_lock:
+            if self._backend is None:
+                from queen_portable.backends import load_backend
+                from queen_portable.config import QueenConfig
+                self._backend = load_backend(QueenConfig())
+        return self._backend
+
+    def analyze(self, payload: dict) -> dict:
+        from queen_portable.types import AnalyzeRequest
+        return self._load().analyze(AnalyzeRequest(**payload)).to_dict()
+
+
+class RemoteQueen:
+    """Talks to `queen serve` somewhere else over HTTP."""
+
+    def __init__(self, url: str, timeout: float) -> None:
+        self.url, self.timeout = url.rstrip("/"), timeout
+        self.where = self.url
+
+    def available(self) -> tuple[bool, str]:
+        try:
+            with urllib.request.urlopen(self.url + "/health", timeout=3) as r:
+                json.loads(r.read())
+            return True, ""
+        except Exception:
+            return False, (f"QUEEN isn't reachable at {self.url}. Start it there with "
+                           "`queen serve --host 0.0.0.0`, or unset QUEEN_URL to run it here.")
+
+    def analyze(self, payload: dict) -> dict:
+        req = urllib.request.Request(self.url + "/analyze", data=json.dumps(payload).encode(),
                                      headers={"Content-Type": "application/json"})
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as r:
@@ -61,14 +97,44 @@ class QueenEngine(Engine):
                 msg = str(e)
             raise RuntimeError(f"QUEEN server error: {msg}") from None
 
-    # -- Engine interface -------------------------------------------------------
+
+def make_transport():
+    url = os.environ.get("QUEEN_URL")
+    if url:
+        return RemoteQueen(url, float(os.environ.get("QUEEN_TIMEOUT", "600")))
+    return LocalQueen()
+
+
+class QueenEngine(Engine):
+    name = "queen"
+    can_explain = True
+
+    def __init__(self) -> None:
+        self.transport = make_transport()
+        self._lock = asyncio.Lock()  # one position at a time on one model
+
     async def available(self) -> tuple[bool, str]:
-        try:
-            await asyncio.to_thread(self._get, "/health", 3)
-            return True, ""
-        except Exception:
-            return False, (f"QUEEN isn't running at {self.url}. Start it with `queen serve` "
-                           "(from queen-portable), or set QUEEN_URL to where it runs.")
+        return await asyncio.to_thread(self.transport.available)
+
+    async def warm_up(self) -> None:
+        """Start loading a local QUEEN in the background. Never blocks or fails startup."""
+        if not isinstance(self.transport, LocalQueen):
+            return
+        ok, why = self.transport.available()
+        if not ok:
+            print(f"QUEEN: {why}")
+            return
+
+        def load():
+            print("QUEEN: loading the model in the background...", flush=True)
+            try:
+                backend = self.transport._load()
+                device = getattr(backend, "device", "?")
+                print(f"QUEEN: ready on {device}.", flush=True)
+            except Exception as e:  # shown again in the UI if someone picks Queen
+                print(f"QUEEN: failed to load: {e}", flush=True)
+
+        threading.Thread(target=load, daemon=True).start()
 
     async def analyze(self, board: chess.Board, question: str | None = None) -> Analysis:
         replay = board.root()
@@ -80,7 +146,7 @@ class QueenEngine(Engine):
         if question:
             payload["prompt"] = question
         async with self._lock:
-            data = await asyncio.to_thread(self._post, "/analyze", payload)
+            data = await asyncio.to_thread(self.transport.analyze, payload)
         return parse_queen_reply(board, data, question)
 
 

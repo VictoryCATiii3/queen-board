@@ -3,9 +3,13 @@ __pycache__/
 .venv/
 .env
 .pytest_cache/
-# never commit model weights — Queen is downloaded separately
-queen_hce-4/
+*.egg-info/
+# Stockfish download
+bin/
+# never commit model files: QUEEN is downloaded from Hugging Face on first run
 *.safetensors
+*.pt
 *.bin
 *.pb.gz
-bin/
+queen_pawn-8/
+queen_hce-4/

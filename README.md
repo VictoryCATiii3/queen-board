@@ -1,86 +1,134 @@
 # Queen Board
 
-A local chessboard for playing against — and asking questions of — **Queen**
-(`princeton-nlp/queen_pawn-8` by default, from *Language Models That Play Chess and Explain
-Their Moves*), with Stockfish and a random mover as stand-in opponents.
+Play chess against **QUEEN**, Princeton's 4B-parameter chess model that explains its
+moves in plain English, on your own computer. Pick QUEEN as your opponent and it tells
+you why it played each move; ask it about any position and it draws its plan as arrows.
+Stockfish and a random mover are included as other opponents.
 
-This is stage 1 of a bigger plan:
-
-1. **Board + engines** (this repo, now) — play, analyse, see arrows.
-2. **Persistent Queen worker** — done: [queen-portable](../queen-portable) (`queen serve`) loads the model once and runs on Linux, macOS and Windows.
-3. **MCP wrapper** — the same API as tools any LLM client can call.
-4. **SillyTavern extension** — your character asks Queen, then explains in its own voice.
+**Unofficial.** Not affiliated with or endorsed by the QUEEN authors. All credit for the
+model goes to them:
+- Paper: *Language Models that Play Chess and Explain Their Moves* (Adithya Bhaskar, Jeffrey Cheng & Danqi Chen, 2026), https://arxiv.org/abs/2610.03695
+- Models: https://huggingface.co/princeton-nlp/queen_pawn-8 · https://huggingface.co/princeton-nlp/queen_hce-4
 
 ## Quick start
 
-Both launchers create a `.venv` in this folder and install everything there.
-Nothing is installed globally (`PIP_REQUIRE_VIRTUALENV` is set while they run).
-They also download Stockfish into `bin/stockfish/` if it isn't already
-installed, and only reinstall packages when `requirements.txt` changes.
+| System | Launcher | Status |
+|---|---|---|
+| Linux (NVIDIA GPU recommended) | `queen_runner_linux.sh` | tested |
+| macOS (Apple Silicon, 16 GB+) | `queen_runner_mac.sh` | coming next |
+| Windows | `run.bat` | untested; board + Stockfish only for now |
 
-**Windows (CPU only):** double-click `run.bat`. It needs Python 3.10+ from
-python.org. The browser opens on http://127.0.0.1:8000. It hides GPUs
-(`CUDA_VISIBLE_DEVICES=-1`) for the board itself; Queen runs separately (below). Stockfish uses half your CPU
-cores by default (`set STOCKFISH_THREADS=8` to change).
-
-**Linux / macOS:**
+**Linux:** open a terminal in this folder and run
 
 ```bash
-./run.sh                          # Queen from `queen serve` on this machine
-CPU_ONLY=1 ./run.sh               # same CPU-only setup as run.bat
+./queen_runner_linux.sh
 ```
 
-Pick an opponent: **Nobody** (play both sides), **Random mover**, **Stockfish**
-(levels 0–20), or **Queen 4B**. Click or drag to move. *Analyze position* asks
-the chosen engine about the current position; its best move and line are drawn
-as arrows (gold = your side's moves, blue = replies).
+or double-click it in your file manager and choose *Run* (some file managers need
+right-click > *Run as a Program*). It opens its own terminal window.
 
-### Hooking up Queen
+The first run takes a while: it creates a private Python environment in `.venv`,
+installs PyTorch (a few GB), downloads Stockfish, and downloads QUEEN (~8.4 GB, into the
+standard Hugging Face cache). Then it opens the board in your browser. Later runs start
+in seconds. Nothing is installed outside this folder except the model download.
+Press Ctrl+C or close the terminal window to stop.
 
-Queen runs as its own small server from **queen-portable**, which loads the model
-once and works on Linux + NVIDIA, Apple Silicon Macs, and Windows (quantized for
-smaller GPUs). The board just sends it positions over HTTP, so the board can be on
-a different computer from the model.
+**Hardware:** QUEEN runs best on an NVIDIA GPU with 10 GB+ of memory (RTX 3080/3090/4080
+and up). Without one it runs on the CPU, which works but can take minutes per move.
 
-```bash
-# on the machine with the GPU
-queen serve --host 0.0.0.0        # --host 0.0.0.0 only if other machines need it
+## Using it
 
-# on the machine with the board (same machine: no setting needed)
-QUEEN_URL=http://<gpu-machine-ip>:8765 ./run.sh       # Windows: set QUEEN_URL=... then run.bat
-```
+- **Opponent:** Nobody (play both sides), Random mover, Stockfish (levels 0–20), or Queen 4B.
+- **When QUEEN plays**, the panel on the right explains why it chose that move.
+- **Analyze position** asks the chosen engine about the current position and draws its
+  best move and line as arrows (gold = your side, blue = replies).
+- **Questions** typed in the Ask box are sent to QUEEN as its prompt. QUEEN was trained
+  on a single fixed analysis prompt, so it usually gives its standard analysis anyway.
+- **Undo** takes back your last move (and the engine's reply). **Start from a position**
+  takes any FEN.
 
-If Queen isn't reachable, it's greyed out in the opponent list with the reason.
+QUEEN's moves are strong (about 2,700 Elo in the paper), but its explanations can contain
+mistakes even when the move is right.
+
+## Settings
+
+Set these before the launcher, e.g. `QUEEN_MODEL=hce-4 ./queen_runner_linux.sh`.
 
 | Variable | Default | What it does |
 |---|---|---|
-| `QUEEN_URL` | `http://127.0.0.1:8765` | Where `queen serve` is listening |
-| `QUEEN_TIMEOUT` | `600` | Seconds to wait for one analysis |
-| `QUEEN_DEBUG` | unset | `1` = include Queen's full reply in the panel's raw data |
-| `STOCKFISH_PATH` | `bin/stockfish/`, then PATH | Stockfish binary |
-| `STOCKFISH_TIME` | `0.5` | Seconds per Stockfish move |
-| `STOCKFISH_THREADS` | half your CPU cores | CPU threads Stockfish uses |
-| `STOCKFISH_HASH` | `128` | Stockfish hash table, MB |
-| `SKIP_STOCKFISH` | unset | `1` = don't download Stockfish |
+| `PORT` | `8000` | Web port |
+| `QUEEN_MODEL` | `pawn-8` | `pawn-8` (stronger) or `hce-4` |
+| `QUEEN_DEVICE` | auto | `cuda`, `mps`, or `cpu` |
+| `QUEEN_QUANTIZE` | off | `int8` or `nf4`: smaller memory for NVIDIA GPUs under ~10 GB (experimental) |
+| `QUEEN_MODEL_DIR` | | Use a QUEEN checkpoint folder you've already downloaded |
+| `QUEEN_URL` | | Use QUEEN running on another machine (see below) |
+| `HF_HOME` | `~/.cache/huggingface` | Where Hugging Face stores the model (e.g. an external drive) |
+| `STOCKFISH_PATH` | auto | Stockfish binary to use |
+| `STOCKFISH_TIME` / `STOCKFISH_THREADS` / `STOCKFISH_HASH` | `0.5` s / half your cores / `128` MB | Stockfish tuning |
+| `NO_BROWSER` | | `1` = don't open a browser |
 
-Notes:
-- The full game history is sent with every position; Queen uses it.
-- Queen's longer lines can drift into illegal moves. The adapter keeps only the
-  legal prefix of any line it draws.
-- Queen's own evaluation (the `EVALUATION:` line, including mates) is converted to
-  White's point of view for the eval display.
-- **Questions** ("why not Nf3?") are sent to Queen as its prompt. This is
-  experimental: Queen was trained on one fixed analysis prompt, so free-form answers
-  can be rough, and the panel says so. Leave the box empty for the standard analysis.
-- Queen's explanations can contain mistakes even when its move is right.
+### QUEEN on another machine
 
-## API
+Run the board on a laptop and QUEEN on a GPU machine on the same network:
 
-All moves are validated server-side by python-chess.
+```bash
+# on the GPU machine (inside this folder, after running the launcher once)
+.venv/bin/queen serve --host 0.0.0.0
+
+# on the laptop
+QUEEN_URL=http://<gpu-machine-ip>:8765 ./queen_runner_linux.sh
+```
+
+With `QUEEN_URL` set, the laptop skips installing PyTorch and the model.
+
+## The `queen` command
+
+The launcher also installs a command-line tool into `.venv/bin/queen`:
+
+```bash
+.venv/bin/queen analyze --fen "r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w KQkq - 4 4"
+.venv/bin/queen serve            # QUEEN as a small HTTP API on port 8765
+.venv/bin/queen info             # which device and model would be used
+```
+
+`POST /analyze {"fen": ..., "history": [...], "prompt": null}` on `queen serve` returns the
+move, explanation and critical line as JSON, for use from other programs.
+
+## How it works
+
+The official QUEEN runner needs vLLM, which only runs on Linux with NVIDIA GPUs. QUEEN is
+a Leela Chess Zero board encoder connected to the SmolLM3 language model by 16 gated
+cross-attention "bridge" layers. `queen_portable/xattn.py` re-implements those bridges in
+plain PyTorch (verified identical to the official math), so the same weights run through
+ordinary `transformers` on NVIDIA, Apple Silicon or CPU. QUEEN's own helper code (board
+encoding, move parsing) is loaded from the downloaded model folder, not copied here.
+
+```
+queen_portable/   QUEEN without vLLM: model loading, the bridge, CLI, HTTP server
+server/           the board's API (FastAPI) and engine adapters (queen, stockfish, random)
+web/              the board itself (plain HTML/JS/SVG, no build step)
+tools/            Stockfish downloader, bridge equivalence check
+```
+
+Each piece works on its own: `queen_portable` can be used without the board, and the board
+talks to every engine through the same small interface (`server/engines/base.py`).
+
+### Checking against the official runner (developers)
+
+On Linux + NVIDIA with the official QUEEN environment installed:
+
+```bash
+.venv/bin/python -m queen_portable.parity --upstream-python <official-venv>/bin/python
+```
+
+This plays a few positions through both runners with greedy decoding and compares the
+moves and text. Our last run: 5/5 identical moves.
+
+## Board API
 
 | Method | Path | Body |
 |---|---|---|
-| GET | `/api/state` | — FEN, legal moves, history, check, result, PGN |
+| GET | `/api/state` | — FEN, legal moves, history, result, outcome, engine's last explanation, PGN |
 | GET | `/api/engines` | — which engines are set up |
 | POST | `/api/new` | `{mode: "hotseat"|"engine", engine?, human_color?, fen?}` |
 | POST | `/api/move` | `{uci: "e2e4"}` |
@@ -89,28 +137,23 @@ All moves are validated server-side by python-chess.
 | POST | `/api/analyze` | `{engine, question?}` → best move, eval, line, text |
 | POST | `/api/stockfish/skill` | `{level: 0-20}` |
 
-## Adding an engine
-
-Subclass `server/engines/base.py:Engine`, implement `analyze()` (and
-optionally `choose_move()`), register it in `server/engines/__init__.py`.
+To add an engine, subclass `server/engines/base.py:Engine` and register it in
+`server/engines/__init__.py`.
 
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest -q        # Windows: .venv\Scripts\python -m pytest -q
+.venv/bin/python -m pip install -e ".[dev]"
+.venv/bin/python -m pytest -q
 ```
 
-Tests use a fake UCI engine and a fake Queen server, so they run without a GPU.
+Tests use stand-ins for Stockfish and QUEEN, so they run without a GPU or model download.
 
-## Colab
+## Licensing
 
-`notebooks/queen_board_colab.ipynb` runs the whole thing on a Colab GPU. Queen
-needs BF16 and a CUDA-13-compatible driver, so a T4 won't work; use an L4 or
-A100 runtime. The first cell checks your GPU before downloading anything.
-
-## License note
-
-This repo contains only the board and glue code. It does not include Queen's
-weights; the model card says no blanket license is asserted for the combined
-release, and upstream terms (SmolLM3: Apache-2.0, Lc0) apply. Check those
-before redistributing anything built on Queen.
+The code in this repo is Apache-2.0. QUEEN's weights and code are **not** included and not
+covered by that license: they're downloaded from Princeton's Hugging Face repos. Their
+model card says upstream component terms apply (SmolLM3: Apache-2.0; Leela Chess Zero
+encoder: see lczero.org) and asserts no blanket license for the combined release. If the
+authors would like anything here changed or removed, please open an issue and I'll act on
+it promptly.

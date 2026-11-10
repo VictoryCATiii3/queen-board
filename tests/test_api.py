@@ -142,7 +142,7 @@ def test_queen_unavailable_message(monkeypatch):
     from server.engines.queen import QueenEngine
     monkeypatch.setenv("QUEEN_URL", "http://127.0.0.1:9")  # nothing listens here
     ok, why = asyncio.run(QueenEngine().available())
-    assert not ok and "queen serve" in why
+    assert not ok and "queen serve" in why and "QUEEN_URL" in why
 
 
 def test_queen_move_comes_with_reasoning(fake_queen):
@@ -172,3 +172,32 @@ def test_question_echo_is_checked():
     bad = parse_queen_reply(board, {"best_move_uci": "e2e4", "text": "x",
                                     "raw": {"inference_settings": {"prompt": "Analyze..."}}}, "why?")
     assert "Warning" in bad.text
+
+
+def test_queen_runs_in_process_without_queen_url(monkeypatch):
+    """No QUEEN_URL: the board loads QUEEN itself (here a stand-in backend), one process."""
+    from queen_portable.types import Analysis as QAnalysis
+    from server.engines import queen as qmod
+
+    class FakeBackend:
+        calls = []
+
+        def analyze(self, req):
+            self.calls.append(req)
+            mv = sorted(chess.Board(req.fen).legal_moves, key=lambda m: m.uci())[0]
+            return QAnalysis.from_upstream({"best_move_uci": mv.uci(), "text": "in-process",
+                                            "raw_text": "EVALUATION: -0.2",
+                                            "inference_settings": {"prompt": req.prompt}})
+
+    fake = FakeBackend()
+    monkeypatch.delenv("QUEEN_URL", raising=False)
+    monkeypatch.setattr(qmod.LocalQueen, "_load", lambda self: fake)
+    import server.app as app_mod
+    app_mod._engines.pop("queen", None)
+    assert isinstance(app_mod.get_engine("queen").transport, qmod.LocalQueen)
+    c.post("/api/new", json={"mode": "engine", "engine": "queen"})
+    c.post("/api/move", json={"uci": "e2e4"})
+    s = c.post("/api/engine_move", json={}).json()
+    assert s["engine_explanation"]["text"].startswith("in-process")
+    assert len(fake.calls) == 1 and len(fake.calls[0].history) == 1
+    app_mod._engines.pop("queen", None)
