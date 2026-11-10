@@ -1,13 +1,13 @@
 # Queen Board
 
 A local chessboard for playing against — and asking questions of — **Queen**
-(`princeton-nlp/queen_hce-4`, from *Language Models That Play Chess and Explain
+(`princeton-nlp/queen_pawn-8` by default, from *Language Models That Play Chess and Explain
 Their Moves*), with Stockfish and a random mover as stand-in opponents.
 
 This is stage 1 of a bigger plan:
 
 1. **Board + engines** (this repo, now) — play, analyse, see arrows.
-2. **Persistent Queen worker** — load the model once instead of per move.
+2. **Persistent Queen worker** — done: [queen-portable](../queen-portable) (`queen serve`) loads the model once and runs on Linux, macOS and Windows.
 3. **MCP wrapper** — the same API as tools any LLM client can call.
 4. **SillyTavern extension** — your character asks Queen, then explains in its own voice.
 
@@ -20,13 +20,13 @@ installed, and only reinstall packages when `requirements.txt` changes.
 
 **Windows (CPU only):** double-click `run.bat`. It needs Python 3.10+ from
 python.org. The browser opens on http://127.0.0.1:8000. It hides GPUs
-(`CUDA_VISIBLE_DEVICES=-1`) and turns Queen off. Stockfish uses half your CPU
+(`CUDA_VISIBLE_DEVICES=-1`) for the board itself; Queen runs separately (below). Stockfish uses half your CPU
 cores by default (`set STOCKFISH_THREADS=8` to change).
 
 **Linux / macOS:**
 
 ```bash
-./run.sh                          # Queen from ~/Workspace/QUEEN if present
+./run.sh                          # Queen from `queen serve` on this machine
 CPU_ONLY=1 ./run.sh               # same CPU-only setup as run.bat
 ```
 
@@ -37,44 +37,42 @@ as arrows (gold = your side's moves, blue = replies).
 
 ### Hooking up Queen
 
-The server runs the official `infer.py` per position. Point it at the folder
-you downloaded from Hugging Face (the one with `infer.py` and `.venv/`):
+Queen runs as its own small server from **queen-portable**, which loads the model
+once and works on Linux + NVIDIA, Apple Silicon Macs, and Windows (quantized for
+smaller GPUs). The board just sends it positions over HTTP, so the board can be on
+a different computer from the model.
 
 ```bash
-QUEEN_DIR=~/Workspace/QUEEN/queen_hce-4 ./run.sh
+# on the machine with the GPU
+queen serve --host 0.0.0.0        # --host 0.0.0.0 only if other machines need it
+
+# on the machine with the board (same machine: no setting needed)
+QUEEN_URL=http://<gpu-machine-ip>:8765 ./run.sh       # Windows: set QUEEN_URL=... then run.bat
 ```
+
+If Queen isn't reachable, it's greyed out in the opponent list with the reason.
 
 | Variable | Default | What it does |
 |---|---|---|
-| `QUEEN_DIR` | `~/Workspace/QUEEN` (or its `queen_hce-4/`) | Where `infer.py` lives |
-| `QUEEN_CMD` | `.venv/bin/python infer.py --fen "{fen}" --history {history} --gpu-memory-utilization 0.35` | Command template |
-| `QUEEN_TIMEOUT` | `600` | Seconds before giving up |
-| `QUEEN_DEBUG` | unset | Set to `1` to see the stdout tail in the panel |
-| `QUEEN_DISABLE` | unset | `1` turns Queen off (run.bat sets this) |
+| `QUEEN_URL` | `http://127.0.0.1:8765` | Where `queen serve` is listening |
+| `QUEEN_TIMEOUT` | `600` | Seconds to wait for one analysis |
+| `QUEEN_DEBUG` | unset | `1` = include Queen's full reply in the panel's raw data |
 | `STOCKFISH_PATH` | `bin/stockfish/`, then PATH | Stockfish binary |
 | `STOCKFISH_TIME` | `0.5` | Seconds per Stockfish move |
 | `STOCKFISH_THREADS` | half your CPU cores | CPU threads Stockfish uses |
 | `STOCKFISH_HASH` | `128` | Stockfish hash table, MB |
 | `SKIP_STOCKFISH` | unset | `1` = don't download Stockfish |
 
-**Why Queen is off on Windows / CPU:** the official `infer.py` runs on vLLM,
-pins CUDA 13 packages, and exits with "CPU inference is not supported by this
-runner" when there's no CUDA. Running Queen on a CPU would mean porting its
-custom encoder + cross-attention model to plain PyTorch, which is a separate
-project. (On Windows, Queen only turns on if you supply your own `QUEEN_CMD` and
-don't use run.bat, e.g. to call a Queen running elsewhere.)
-
 Notes:
-- `{history}` is a temp JSON file of earlier FENs. Queen uses game history, so
-  repetitions and context are passed properly. **Check the file format matches
-  what infer.py expects** (assumed: a JSON list of FEN strings).
-- Each Queen call currently reloads the model, so expect long waits per move.
-  That's stage 2's job.
+- The full game history is sent with every position; Queen uses it.
 - Queen's longer lines can drift into illegal moves. The adapter keeps only the
   legal prefix of any line it draws.
-- Free-form questions (“why not Nf3?”) are not sent to Queen yet: `infer.py`
-  uses a fixed analysis prompt. The question box is wired through the API so
-  it's ready once we find out how to prompt it.
+- Queen's own evaluation (the `EVALUATION:` line, including mates) is converted to
+  White's point of view for the eval display.
+- **Questions** ("why not Nf3?") are sent to Queen as its prompt. This is
+  experimental: Queen was trained on one fixed analysis prompt, so free-form answers
+  can be rough, and the panel says so. Leave the box empty for the standard analysis.
+- Queen's explanations can contain mistakes even when its move is right.
 
 ## API
 
@@ -102,7 +100,7 @@ optionally `choose_move()`), register it in `server/engines/__init__.py`.
 .venv/bin/python -m pytest -q        # Windows: .venv\Scripts\python -m pytest -q
 ```
 
-Tests use a fake UCI engine and a fake `infer.py`, so they run without a GPU.
+Tests use a fake UCI engine and a fake Queen server, so they run without a GPU.
 
 ## Colab
 

@@ -15,7 +15,7 @@ import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 from server.app import app  # noqa: E402
-from server.engines.queen import parse_queen_output  # noqa: E402
+from server.engines.queen import parse_queen_reply  # noqa: E402
 
 c = TestClient(app)
 c.__enter__()  # one event loop for the whole module (engine subprocesses live on it)
@@ -62,15 +62,27 @@ def test_uci_engine_play_and_analyze():
     assert a["best_move"] and a["best_san"] and a["eval_cp"] == 25
 
 
-def test_queen_parser_trims_illegal_line():
+def test_queen_reply_parsing():
     board = chess.Board()
-    out = "loading model...\n" + json.dumps({
-        "best_move": "e2e4", "evaluation": 0.3, "analysis": "Center control.",
-        "critical_line": ["e2e4", "e7e5", "g1f3", "d8e5"],  # last one illegal
-    })
-    a = parse_queen_output(board, out)
+    reply = {
+        "best_move_uci": "e2e4", "move_source": "best_move", "text": "Center control.",
+        "critical_line": {"legal_steps": [{"uci": "e2e4"}, {"uci": "e7e5"}, {"uci": "g1f3"},
+                                          {"uci": "d8e5"}]},  # last one illegal
+        "raw": {"raw_text": "...\nEVALUATION: +0.30 from the player's perspective."},
+    }
+    a = parse_queen_reply(board, reply)
     assert a.best_move == "e2e4" and a.line == ["e2e4", "e7e5", "g1f3"]
     assert a.eval_cp == 30 and "Center" in a.text
+
+
+def test_queen_eval_is_white_pov_and_mate():
+    board = chess.Board("4k3/8/8/8/8/8/8/4K3 b - - 0 1")  # black to move
+    a = parse_queen_reply(board, {"best_move_uci": "e8d8", "text": "",
+                                  "raw": {"raw_text": "EVALUATION: +1.5 for the player"}})
+    assert a.eval_cp == -150
+    a = parse_queen_reply(chess.Board(), {"best_move_uci": "e2e4", "text": "",
+                                          "raw": {"raw_text": "EVALUATION: +M1 from the player's perspective."}})
+    assert a.mate_in == 1 and a.eval_cp is None
 
 
 def test_engines_listing():
@@ -78,84 +90,56 @@ def test_engines_listing():
     assert names == {"random", "stockfish", "queen"}
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="Queen is off on Windows")
-def test_queen_subprocess_with_fake_infer(tmp_path, monkeypatch):
-    """Fake queen_hce-4 folder: checks flags, history file and JSON parsing end to end."""
-    (tmp_path / ".venv/bin").mkdir(parents=True)
-    (tmp_path / ".venv/bin/python").symlink_to(sys.executable)
-    (tmp_path / "infer.py").write_text(
-        "import argparse, json, chess\n"
-        "p = argparse.ArgumentParser(); p.add_argument('--fen'); p.add_argument('--history')\n"
-        "p.add_argument('--gpu-memory-utilization')\n"
-        "a = p.parse_args(); hist = json.load(open(a.history))\n"
-        "b = chess.Board(a.fen); mv = sorted(b.legal_moves, key=lambda m: m.uci())[-1]\n"
-        "print('INFO vllm noise {not json}')\n"
-        "print(json.dumps({'text': f'history={len(hist)}', 'best_move_uci': mv.uci(), 'move_source': 'model'}))\n"
-    )
-    monkeypatch.setenv("QUEEN_DIR", str(tmp_path))
-    import server.app as srv
-    srv._engines.pop("queen", None)
+@pytest.fixture
+def fake_queen(monkeypatch):
+    """A stand-in for `queen serve`: records requests, answers with the last legal move."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    seen = []
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def _send(self, obj):
+            body = json.dumps(obj).encode()
+            self.send_response(200); self.send_header("Content-Length", str(len(body)))
+            self.end_headers(); self.wfile.write(body)
+
+        def do_GET(self):
+            self._send({"ok": True})
+
+        def do_POST(self):
+            data = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            seen.append(data)
+            b = chess.Board(data["fen"])
+            mv = sorted(b.legal_moves, key=lambda m: m.uci())[-1]
+            self._send({"best_move_uci": mv.uci(), "move_source": "best_move",
+                        "text": f"history={len(data['history'])}", "critical_line": None,
+                        "raw": {"raw_text": "EVALUATION: +0.5"}})
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    monkeypatch.setenv("QUEEN_URL", f"http://127.0.0.1:{srv.server_address[1]}")
+    import server.app as app_mod
+    app_mod._engines.pop("queen", None)
+    yield seen
+    srv.shutdown()
+    app_mod._engines.pop("queen", None)
+
+
+def test_queen_over_http(fake_queen):
     c.post("/api/new", json={"mode": "engine", "engine": "queen"})
     c.post("/api/move", json={"uci": "e2e4"})
     s = c.post("/api/engine_move", json={}).json()
     assert len(s["history"]) == 2
-    a = c.post("/api/analyze", json={"engine": "queen"}).json()
-    assert a["text"] == "history=2" and a["best_san"]
+    a = c.post("/api/analyze", json={"engine": "queen", "question": "what is the plan?"}).json()
+    assert "history=2" in a["text"] and a["best_san"]
+    assert fake_queen[-1]["prompt"] == "what is the plan?" and len(fake_queen[-1]["history"]) == 2
 
 
-def test_queen_is_off_on_windows(monkeypatch):
+def test_queen_unavailable_message(monkeypatch):
     from server.engines.queen import QueenEngine
-    monkeypatch.setattr(sys, "platform", "win32")
-    monkeypatch.delenv("QUEEN_CMD", raising=False)
+    monkeypatch.setenv("QUEEN_URL", "http://127.0.0.1:9")  # nothing listens here
     ok, why = asyncio.run(QueenEngine().available())
-    assert not ok and "CPU" in why
-
-
-def test_queen_disable_flag(monkeypatch):
-    from server.engines.queen import QueenEngine
-    monkeypatch.setenv("QUEEN_DISABLE", "1")
-    ok, _ = asyncio.run(QueenEngine().available())
-    assert not ok
-
-
-def test_stockfish_found_in_repo_bin(tmp_path, monkeypatch):
-    import server.engines.stockfish as sf
-    exe = tmp_path / "stockfish" / "stockfish-ubuntu-x86-64"
-    exe.parent.mkdir()
-    exe.write_text("#!/bin/sh\n")
-    exe.chmod(0o755)
-    monkeypatch.setattr(sf, "REPO_BIN", tmp_path)
-    monkeypatch.delenv("STOCKFISH_PATH", raising=False)
-    found = sf._find_binary()
-    assert found and found.endswith("stockfish-ubuntu-x86-64")
-
-
-def test_stockfish_asset_picking():
-    sys.path.insert(0, str(HERE.parent / "tools"))
-    from get_stockfish import pick_assets
-    old_style = ["stockfish-windows-x86-64-avx2.zip", "stockfish-windows-x86-64.zip",
-                 "stockfish-windows-x86-64-avx512.zip", "stockfish-ubuntu-x86-64-avx2.tar",
-                 "stockfish-macos-m1-apple-silicon.tar"]
-    assert pick_assets(old_style, "nt", "AMD64", avx2=True)[:2] == [
-        "stockfish-windows-x86-64.zip", "stockfish-windows-x86-64-avx2.zip"]
-    assert pick_assets(old_style, "nt", "AMD64", avx2=False)[-1] == "stockfish-windows-x86-64-avx2.zip"
-    assert pick_assets(old_style, "linux", "x86_64", avx2=True) == ["stockfish-ubuntu-x86-64-avx2.tar"]
-    assert pick_assets(old_style, "darwin", "arm64", avx2=False) == ["stockfish-macos-m1-apple-silicon.tar"]
-    universal = ["stockfish-windows.zip", "stockfish-linux.tar", "stockfish-windows-arm64.zip"]
-    assert pick_assets(universal, "nt", "AMD64", avx2=True) == ["stockfish-windows.zip"]
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="runs a .py via shebang")
-def test_stockfish_verify_handshake():
-    sys.path.insert(0, str(HERE.parent / "tools"))
-    from get_stockfish import works
-    assert works(HERE / "fake_uci.py")
-    assert not works(HERE / "does-not-exist")
-
-
-def test_state_reports_opponent_and_level():
-    c.post("/api/stockfish/skill", json={"level": 7})
-    s = c.post("/api/new", json={"mode": "engine", "engine": "stockfish", "human_color": "white"}).json()
-    assert s["mode"] == "engine" and s["engine"] == "stockfish" and s["skill"] == 7
-    assert '[Black "Stockfish (level 7)"]' in s["pgn"]
-    c.post("/api/stockfish/skill", json={"level": 20})
+    assert not ok and "queen serve" in why

@@ -1,7 +1,7 @@
 @echo off
 setlocal EnableExtensions
 REM ============================================================
-REM  Queen Board - Windows launcher (CPU only)
+REM  Queen Board - Windows launcher
 REM  Double-click, or run from a terminal:  run.bat
 REM  Everything installs into .venv in this folder. Nothing global.
 REM
@@ -9,6 +9,7 @@ REM  Optional settings (set before running):
 REM    set PORT=8000            set HOST=127.0.0.1
 REM    set STOCKFISH_THREADS=4  set STOCKFISH_PATH=C:\path\to\stockfish.exe
 REM    set SKIP_STOCKFISH=1     set NO_BROWSER=1
+REM    set QUEEN_URL=http://192.168.1.50:8765   (Queen running on another machine)
 REM ============================================================
 cd /d "%~dp0"
 
@@ -16,10 +17,9 @@ REM Never let pip touch the global Python, even by accident.
 set "PIP_REQUIRE_VIRTUALENV=true"
 set "PIP_DISABLE_PIP_VERSION_CHECK=1"
 
-REM CPU only: hide GPUs from anything launched from here, and keep Queen off
-REM (its official runner is CUDA-only and has no CPU mode).
+REM The board itself is CPU only. Queen runs separately (`queen serve`), on this
+REM machine or another one; point QUEEN_URL at it.
 set "CUDA_VISIBLE_DEVICES=-1"
-set "QUEEN_DISABLE=1"
 
 if not defined PORT set "PORT=8000"
 if not defined HOST set "HOST=127.0.0.1"

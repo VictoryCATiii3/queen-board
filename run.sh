@@ -2,16 +2,16 @@
 # Queen Board launcher for Linux/macOS → http://localhost:8000
 # Everything installs into .venv in this folder. Nothing global.
 #
-#   ./run.sh                                   Queen from ~/Workspace/QUEEN
-#   QUEEN_DIR=/path/to/queen_hce-4 ./run.sh
-#   CPU_ONLY=1 ./run.sh                        hide GPUs, Queen off
+#   ./run.sh                                   Queen at http://127.0.0.1:8765 (start it with `queen serve`)
+#   QUEEN_URL=http://192.168.1.50:8765 ./run.sh   use Queen running on another machine
+#   CPU_ONLY=1 ./run.sh                        hide GPUs from this launcher (Queen can still be remote)
 set -euo pipefail
 cd "$(dirname "$0")"
 
 export PIP_REQUIRE_VIRTUALENV=true          # never let pip touch the global Python
 export PIP_DISABLE_PIP_VERSION_CHECK=1
 if [ "${CPU_ONLY:-0}" = "1" ]; then
-  export CUDA_VISIBLE_DEVICES=-1 QUEEN_DISABLE=1
+  export CUDA_VISIBLE_DEVICES=-1
 fi
 
 PY=${PYTHON:-python3}

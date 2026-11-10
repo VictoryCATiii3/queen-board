@@ -1,22 +1,18 @@
-"""Queen (princeton-nlp/queen_hce-4) adapter.
+"""Queen adapter: talks to a running `queen serve` (from queen-portable).
 
-v0 approach: shell out to the official infer.py for each position and parse
-the JSON it prints after its logs (keys per the model card: text, raw_text,
-best_move_uci, move_source, plus a legality-checked critical line). That
-reloads the model on every call (slow), but needs no changes to their code.
-The next step is a persistent worker that loads the model once (README: Roadmap).
+The board never loads the model itself. QUEEN runs as its own small server,
+on this machine or another one on your network (e.g. the GPU box), and this
+adapter just sends it positions. That keeps the board light enough for any
+computer, and lets Mac/Windows/CPU-only machines use QUEEN running elsewhere.
+
+Start QUEEN first:   queen serve                      (same machine)
+                     queen serve --host 0.0.0.0       (reachable from other machines)
 
 Configure with environment variables:
 
-  QUEEN_DIR      the downloaded queen_hce-4 folder (has infer.py and .venv).
-                 Default: ~/Workspace/QUEEN, or ~/Workspace/QUEEN/queen_hce-4
-  QUEEN_CMD      command template. {fen} = position, {history} = path to a
-                 JSON list of earlier FENs (Queen uses history; a FEN alone
-                 can't express repetition). Default:
-                 .venv/bin/python infer.py --fen "{fen}" --history {history}
-                   --gpu-memory-utilization 0.35
-  QUEEN_TIMEOUT  seconds before giving up (default 600)
-  QUEEN_DEBUG=1  include the stdout tail in the analysis "raw" field
+  QUEEN_URL      where `queen serve` is listening. Default http://127.0.0.1:8765
+  QUEEN_TIMEOUT  seconds to wait for one analysis (default 600)
+  QUEEN_DEBUG=1  include the full server reply in the analysis "raw" field
 """
 from __future__ import annotations
 
@@ -24,24 +20,18 @@ import asyncio
 import json
 import os
 import re
-import shlex
-import sys
-import tempfile
-from pathlib import Path
+import urllib.error
+import urllib.request
 from typing import Any
 
 import chess
 
 from .base import Analysis, Engine
 
-_KEYS = {
-    "best_move": ["best_move_uci", "best_move", "move", "best_move_uci", "uci", "bestmove"],
-    "eval": ["evaluation", "eval", "eval_cp", "score", "centipawns"],
-    "text": ["text", "analysis", "explanation", "text", "summary", "reasoning"],
-    "line": ["critical_line", "pv", "line", "principal_variation"],
-}
-
 _UCI_RE = re.compile(r"\b([a-h][1-8][a-h][1-8][qrbn]?)\b")
+# QUEEN ends its answer with e.g. "EVALUATION: +1.25 ..." or "EVALUATION: +M1 ..."
+# from the side to move's point of view.
+_EVAL_RE = re.compile(r"EVALUATION:\s*([+-]?)\s*(M)?\s*(\d+(?:\.\d+)?)", re.I)
 
 
 class QueenEngine(Engine):
@@ -49,176 +39,108 @@ class QueenEngine(Engine):
     can_explain = True
 
     def __init__(self) -> None:
-        d = Path(os.path.expanduser(os.environ.get("QUEEN_DIR", "~/Workspace/QUEEN")))
-        if not (d / "infer.py").exists() and (d / "queen_hce-4" / "infer.py").exists():
-            d = d / "queen_hce-4"
-        self.dir = d
-        self.cmd = os.environ.get(
-            "QUEEN_CMD",
-            '.venv/bin/python infer.py --fen "{fen}" --history {history} '
-            "--gpu-memory-utilization 0.35",
-        )
+        self.url = os.environ.get("QUEEN_URL", "http://127.0.0.1:8765").rstrip("/")
         self.timeout = float(os.environ.get("QUEEN_TIMEOUT", "600"))
-        self._lock = asyncio.Lock()  # one GPU job at a time
+        self._lock = asyncio.Lock()  # the server handles one position at a time anyway
 
+    # -- plumbing ---------------------------------------------------------------
+    def _get(self, path: str, timeout: float) -> dict:
+        with urllib.request.urlopen(self.url + path, timeout=timeout) as r:
+            return json.loads(r.read())
+
+    def _post(self, path: str, payload: dict) -> dict:
+        req = urllib.request.Request(self.url + path, data=json.dumps(payload).encode(),
+                                     headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                return json.loads(r.read())
+        except urllib.error.HTTPError as e:  # the server reports errors as JSON
+            try:
+                msg = json.loads(e.read()).get("error", str(e))
+            except Exception:
+                msg = str(e)
+            raise RuntimeError(f"QUEEN server error: {msg}") from None
+
+    # -- Engine interface -------------------------------------------------------
     async def available(self) -> tuple[bool, str]:
-        # The official runner is vLLM + CUDA only and exits without a GPU, so on
-        # Windows (or with QUEEN_DISABLE=1) don't even try unless the user has
-        # supplied their own QUEEN_CMD.
-        if os.environ.get("QUEEN_DISABLE") == "1" or (
-            sys.platform == "win32" and "QUEEN_CMD" not in os.environ
-        ):
-            return False, (
-                "Queen's official runner needs Linux + an NVIDIA GPU with BF16 "
-                "(vLLM/CUDA). It has no CPU mode, so it's off on this machine."
-            )
-        if not (self.dir / "infer.py").exists():
-            return False, f"Queen's infer.py not found in {self.dir} (set QUEEN_DIR)."
-        return True, ""
+        try:
+            await asyncio.to_thread(self._get, "/health", 3)
+            return True, ""
+        except Exception:
+            return False, (f"QUEEN isn't running at {self.url}. Start it with `queen serve` "
+                           "(from queen-portable), or set QUEEN_URL to where it runs.")
 
     async def analyze(self, board: chess.Board, question: str | None = None) -> Analysis:
-        ok, why = await self.available()
-        if not ok:
-            raise RuntimeError(why)
-        # Earlier positions, oldest first, excluding the current one.
         replay = board.root()
         history = []
-        for mv in board.move_stack:
+        for mv in board.move_stack:  # earlier positions, oldest first, excluding current
             history.append(replay.fen())
             replay.push(mv)
-        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
-            json.dump(history, fh)
-            hist_path = fh.name
-        quoted = f'"{hist_path}"' if os.name == "nt" else shlex.quote(hist_path)
-        cmd = self.cmd.replace("{fen}", board.fen()).replace("{history}", quoted)
-        try:
-            return await self._run(board, cmd, question)
-        finally:
-            os.unlink(hist_path)
-
-    async def _run(self, board: chess.Board, cmd: str, question: str | None) -> Analysis:
+        payload = {"fen": board.fen(), "history": history, "game_id": 0}
+        if question:
+            payload["prompt"] = question
         async with self._lock:
-            if os.name == "nt":  # let cmd.exe handle Windows quoting/paths
-                proc = await asyncio.create_subprocess_shell(
-                    cmd, cwd=self.dir,
-                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                )
-            else:
-                proc = await asyncio.create_subprocess_exec(
-                    *shlex.split(cmd),
-                    cwd=self.dir,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-            try:
-                out, err = await asyncio.wait_for(proc.communicate(), self.timeout)
-            except asyncio.TimeoutError:
-                proc.kill()
-                raise RuntimeError(f"Queen timed out after {self.timeout:.0f}s")
-        stdout = out.decode(errors="replace")
-        if proc.returncode != 0:
-            tail = err.decode(errors="replace")[-1500:]
-            raise RuntimeError(f"Queen exited with code {proc.returncode}:\n{tail}")
-        return parse_queen_output(board, stdout, question)
+            data = await asyncio.to_thread(self._post, "/analyze", payload)
+        return parse_queen_reply(board, data, question)
 
 
-def _last_json(text: str) -> dict[str, Any] | None:
-    """infer.py may print logs before its JSON; grab the last {...} block."""
-    starts = [m.start() for m in re.finditer(r"^\{", text, re.M)] or [
-        i for i, c in enumerate(text) if c == "{"
-    ]
-    for s in reversed(starts):
-        try:
-            obj = json.loads(text[s:])
-            if isinstance(obj, dict):
-                return obj
-        except json.JSONDecodeError:
-            # try trimming to the matching last brace
-            e = text.rfind("}")
-            try:
-                obj = json.loads(text[s : e + 1])
-                if isinstance(obj, dict):
-                    return obj
-            except json.JSONDecodeError:
-                continue
-    return None
+# -- turning QUEEN's reply into the board's Analysis -------------------------------
 
-
-def _find(obj: Any, names: list[str]) -> Any:
-    """Depth-first search for the first key in `names` anywhere in obj."""
-    if isinstance(obj, dict):
-        for n in names:
-            if n in obj and obj[n] not in (None, ""):
-                return obj[n]
-        for v in obj.values():
-            r = _find(v, names)
-            if r is not None:
-                return r
-    elif isinstance(obj, list):
-        for v in obj:
-            r = _find(v, names)
-            if r is not None:
-                return r
-    return None
-
-
-def parse_queen_output(board: chess.Board, stdout: str, question: str | None = None) -> Analysis:
-    data = _last_json(stdout)
-    a = Analysis(raw={"json": data} if data else {"stdout_tail": stdout[-3000:]})
+def parse_queen_reply(board: chess.Board, data: dict[str, Any], question: str | None = None) -> Analysis:
+    a = Analysis(raw={"move_source": data.get("move_source")})
     if os.environ.get("QUEEN_DEBUG"):
-        a.raw["stdout_tail"] = stdout[-3000:]
+        a.raw["reply"] = data
 
-    # Best move: trust a key if present, else first legal UCI-looking token.
-    cand = _find(data, _KEYS["best_move"]) if data else None
-    candidates = [str(cand)] if cand else []
-    candidates += _UCI_RE.findall(stdout)
-    for c in candidates:
-        m = _UCI_RE.search(c)
-        if not m:
-            continue
+    best = data.get("best_move_uci")
+    if best:
         try:
-            mv = chess.Move.from_uci(m.group(1))
+            mv = chess.Move.from_uci(best)
+            if mv in board.legal_moves:
+                a.best_move = mv.uci()
         except ValueError:
-            continue
-        if mv in board.legal_moves:
-            a.best_move = mv.uci()
-            break
+            pass
 
-    ev = _find(data, _KEYS["eval"]) if data else None
-    if isinstance(ev, (int, float)):
-        # Heuristic: small floats are pawns, large numbers are centipawns.
-        a.eval_cp = int(ev * 100) if abs(ev) < 50 and isinstance(ev, float) else int(ev)
+    if data.get("critical_line"):
+        a.line = _validated_line(board, data["critical_line"])
+    if a.best_move and (not a.line or a.line[0] != a.best_move):
+        a.line = [a.best_move]
 
-    line = _find(data, _KEYS["line"]) if data else None
-    if line:
-        a.line = _validated_line(board, line)
+    raw_text = (data.get("raw") or {}).get("raw_text") or data.get("text", "")
+    a.eval_cp, a.mate_in = _parse_eval(raw_text, board.turn)
 
-    src = _find(data, ["move_source"]) if data else None
-    if src:
-        a.raw["move_source"] = src
-
-    text = _find(data, _KEYS["text"]) if data else None
-    a.text = text if isinstance(text, str) else (json.dumps(text, indent=1) if text else "")
-    if src and "random" in str(src).lower():
-        a.text = ("Warning: Queen's answer couldn't be parsed, so infer.py fell back "
-                  "to a random legal move.\n\n" + a.text)
+    a.text = data.get("text", "")
+    if "random" in str(data.get("move_source", "")).lower():
+        a.text = ("Warning: QUEEN's answer couldn't be parsed, so it fell back to a "
+                  "random legal move.\n\n" + a.text)
     if question:
-        a.text = (
-            f"(Queen uses a fixed analysis prompt — your question '{question}' "
-            f"was not sent to it yet. Showing its standard analysis.)\n\n" + a.text
-        )
+        a.text = (f"(Experimental: your question was sent to QUEEN as its prompt. It was "
+                  f"trained on one fixed analysis prompt, so free-form answers may be rough.)\n\n"
+                  + a.text)
     return a
+
+
+def _parse_eval(text: str, turn: chess.Color) -> tuple[int | None, int | None]:
+    """QUEEN's EVALUATION line -> (centipawns, mate) from White's point of view."""
+    m = None
+    for m in _EVAL_RE.finditer(text or ""):
+        pass  # keep the last one
+    if not m:
+        return None, None
+    sign = -1 if m.group(1) == "-" else 1
+    if turn == chess.BLACK:
+        sign = -sign
+    if m.group(2):
+        return None, sign * int(float(m.group(3)))
+    return int(round(sign * float(m.group(3)) * 100)), None
 
 
 def _validated_line(board: chess.Board, line: Any) -> list[str]:
     """Keep only the prefix of the line that is actually legal.
-    Queen's longer variations can drift into illegal moves."""
-    if isinstance(line, str):
+    QUEEN's longer variations can drift into illegal moves."""
+    if isinstance(line, dict) and isinstance(line.get("legal_steps"), list):
+        tokens = [s.get("uci", "") for s in line["legal_steps"] if isinstance(s, dict)]
+    elif isinstance(line, str):
         tokens = _UCI_RE.findall(line)
-    elif isinstance(line, list):
-        tokens = []
-        for item in line:
-            tokens += _UCI_RE.findall(json.dumps(item)) if not isinstance(item, str) else _UCI_RE.findall(item)
     else:
         tokens = _UCI_RE.findall(json.dumps(line))
     b = board.copy()
