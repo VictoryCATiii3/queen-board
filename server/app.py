@@ -50,6 +50,8 @@ class Game:
         self.start_fen = chess.STARTING_FEN
         # Why the engine made its last move (engines that can explain, i.e. Queen).
         self.engine_explanation: dict | None = None
+        # Every opponent used this game, in order, for the PGN (opponents can swap mid-game).
+        self.opponents: list[str] = []
 
     def engine_to_move(self) -> bool:
         return (
@@ -154,12 +156,26 @@ def _stockfish_skill() -> int | None:
     return int(os.environ.get("STOCKFISH_SKILL", "20"))
 
 
-def _player(color: chess.Color) -> str:
-    if game.mode == "hotseat" or color == game.human_color:
-        return "Human"
+def _opponent_label() -> str | None:
+    if game.mode != "engine":
+        return None
     if game.engine_name == "stockfish":
         return f"Stockfish (level {_stockfish_skill()})"
-    return game.engine_name or "?"
+    return {"queen": "Queen 4B", "random": "Random mover"}.get(game.engine_name or "", game.engine_name or "?")
+
+
+def _note_opponent() -> None:
+    label = _opponent_label()
+    if label and (not game.opponents or game.opponents[-1] != label):
+        game.opponents.append(label)
+
+
+def _player(color: chess.Color) -> str:
+    if game.mode == "hotseat" and not game.opponents:
+        return "Human"
+    if color == game.human_color:
+        return "Human"
+    return " / ".join(game.opponents) or "Human"
 
 
 def pgn() -> str:
@@ -181,6 +197,12 @@ class NewGame(BaseModel):
     engine: str | None = None
     human_color: Literal["white", "black"] = "white"
     fen: str | None = None
+
+
+class OpponentIn(BaseModel):
+    mode: Literal["hotseat", "engine"]
+    engine: str | None = None
+    human_color: Literal["white", "black"] | None = None  # only used when leaving hotseat
 
 
 class MoveIn(BaseModel):
@@ -227,6 +249,23 @@ def new_game(req: NewGame):
     game.engine_name = req.engine if req.mode == "engine" else None
     game.human_color = chess.WHITE if req.human_color == "white" else chess.BLACK
     game.engine_explanation = None
+    game.opponents = []
+    _note_opponent()
+    return state()
+
+
+@app.post("/api/opponent")
+def change_opponent(req: OpponentIn):
+    """Swap the opponent mid-game without touching the position."""
+    if req.mode == "engine":
+        if not req.engine:
+            raise HTTPException(400, "Pick an engine")
+        get_engine(req.engine)
+        if game.mode == "hotseat" and req.human_color:
+            game.human_color = chess.WHITE if req.human_color == "white" else chess.BLACK
+    game.mode = req.mode
+    game.engine_name = req.engine if req.mode == "engine" else None
+    _note_opponent()
     return state()
 
 
@@ -307,6 +346,8 @@ async def analyze(req: AnalyzeIn):
 async def stockfish_skill(req: SkillIn):
     eng = get_engine("stockfish")
     await eng.set_skill(req.level)  # type: ignore[attr-defined]
+    if game.engine_name == "stockfish" and game.board.move_stack:
+        _note_opponent()  # level changed mid-game: keep the PGN honest
     return {"skill": eng.skill_level}  # type: ignore[attr-defined]
 
 

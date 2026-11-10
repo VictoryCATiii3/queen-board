@@ -201,3 +201,18 @@ def test_queen_runs_in_process_without_queen_url(monkeypatch):
     assert s["engine_explanation"]["text"].startswith("in-process")
     assert len(fake.calls) == 1 and len(fake.calls[0].history) == 1
     app_mod._engines.pop("queen", None)
+
+
+def test_swap_opponent_mid_game(fake_queen):
+    c.post("/api/new", json={"mode": "engine", "engine": "random"})
+    c.post("/api/move", json={"uci": "e2e4"})
+    s = c.post("/api/engine_move", json={}).json()
+    fen = s["fen"]
+    s = c.post("/api/opponent", json={"mode": "engine", "engine": "queen"}).json()
+    assert s["engine"] == "queen" and s["fen"] == fen and len(s["history"]) == 2  # position kept
+    c.post("/api/move", json={"uci": "d2d4"})
+    s = c.post("/api/engine_move", json={}).json()
+    assert s["engine_explanation"]["engine"] == "queen"
+    assert "Random mover / Queen 4B" in s["pgn"]
+    s = c.post("/api/opponent", json={"mode": "hotseat"}).json()
+    assert s["mode"] == "hotseat" and not s["engine_to_move"] and len(s["history"]) == 4

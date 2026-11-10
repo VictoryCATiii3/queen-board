@@ -155,6 +155,7 @@ function renderPanel() {
   ol.scrollTop = ol.scrollHeight;
 
   $("undo").disabled = busy || !st.history.length;
+  $("opp").disabled = busy;  // no swapping while an engine is mid-thought
   $("analyze").disabled = busy || !!st.result;
   renderPending();
 }
@@ -167,11 +168,10 @@ function engineLabel(s) {
 }
 
 // Opponent/colour in the controls vs. what the running game actually uses.
+// Opponents swap instantly mid-game; only switching sides waits for "New game".
 function pendingChange() {
   if (!st) return false;
-  const opp = $("opp").value;
-  if (opp === "hotseat") return st.mode !== "hotseat";
-  return st.mode !== "engine" || st.engine !== opp || st.human_color !== $("color").value;
+  return $("opp").value !== "hotseat" && st.mode === "engine" && st.human_color !== $("color").value;
 }
 function renderPending() {
   const p = pendingChange();
@@ -299,12 +299,25 @@ function syncSkillVisibility() {
   $("skill-wrap").style.visibility = $("opp").value === "stockfish" ? "visible" : "hidden";
 }
 
-// Changing opponent or colour before the first move starts the game right away;
-// mid-game it waits for "New game" (and says so) instead of wiping the position.
+// Before the first move (or after the game ends) a change starts a new game.
+// Mid-game, a new opponent takes over the current position right away;
+// switching which side you play waits for "New game" (and says so).
 async function onSettingsChange() {
   syncSkillVisibility();
   if (busy) return;
   if (!st.history.length || st.result) return startNewGame();
+  const opp = $("opp").value;
+  const same = opp === "hotseat" ? st.mode === "hotseat" : (st.mode === "engine" && st.engine === opp);
+  if (!same) {
+    const body = opp === "hotseat" ? { mode: "hotseat" } : { mode: "engine", engine: opp };
+    if (opp !== "hotseat" && st.mode === "hotseat") body.human_color = $("color").value;
+    try {
+      if (opp === "stockfish") await api("stockfish/skill", { level: +$("skill").value });
+      update(await api("opponent", body));
+      if (body.human_color) { flipped = body.human_color === "black"; draw(); renderPanel(); }
+      await maybeEngineMove();
+    } catch (e) { $("status").textContent = "Couldn't switch: " + e.message; }
+  }
   renderPending();
 }
 $("opp").addEventListener("change", onSettingsChange);
