@@ -100,6 +100,16 @@ if [ "$(cat .venv/.installed 2>/dev/null)" != "$STAMP" ]; then
   echo "$STAMP" > .venv/.installed
 fi
 
+# --- 2b. How QUEEN should run on this computer (GPU size, memory) --------------
+if [ -n "$EXTRAS" ]; then
+  HW_ENV="$("$VPY" tools/hardware_check.py --shell)" || HW_ENV=""
+  eval "$HW_ENV"
+  if [ "${QUEEN_NEEDS_BNB:-}" = "1" ]; then
+    say "Installing bitsandbytes for the shrunk (nf4) model"
+    "$VPY" -m pip install "bitsandbytes>=0.45" || { echo "Couldn't install bitsandbytes; using the CPU."; export QUEEN_QUANTIZE="" QUEEN_DEVICE=cpu; }
+  fi
+fi
+
 # --- 3. Stockfish (optional opponent; never stops the launcher) -------------------
 "$VPY" tools/get_stockfish.py || true
 

@@ -78,14 +78,21 @@ if [ "$(cat .venv/.installed 2>/dev/null)" != "$STAMP" ]; then
   echo "$STAMP" > .venv/.installed
 fi
 
+# --- 2b. How QUEEN should run on this computer (GPU size, memory) --------------
+if [ -n "$EXTRAS" ]; then
+  HW_ENV="$("$VPY" tools/hardware_check.py --shell)" || HW_ENV=""
+  eval "$HW_ENV"
+  if [ "${QUEEN_NEEDS_BNB:-}" = "1" ]; then
+    say "Installing bitsandbytes for the shrunk (nf4) model"
+    "$VPY" -m pip install "bitsandbytes>=0.45" || { echo "Couldn't install bitsandbytes; using the CPU."; export QUEEN_QUANTIZE="" QUEEN_DEVICE=cpu; }
+  fi
+fi
+
 # --- 3. Stockfish (optional opponent; never stops the launcher) -------------------
 "$VPY" tools/get_stockfish.py || true
 
 # --- 4. QUEEN model ------------------------------------------------------------
 if [ -z "${QUEEN_URL:-}" ]; then
-  if [ -z "${QUEEN_DEVICE:-}" ] && ! command -v nvidia-smi >/dev/null 2>&1; then
-    say "No NVIDIA GPU found: QUEEN will run on the CPU. That works, but each move can take minutes."
-  fi
   say "Checking the QUEEN model (downloads ~8.4 GB the first time)"
   .venv/bin/queen fetch || fail "couldn't download QUEEN. Check your internet connection and try again."
   echo "QUEEN model is ready."

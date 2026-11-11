@@ -2,7 +2,7 @@
 
 Where it looks, in order:
   1. STOCKFISH_PATH
-  2. <repo>/bin/stockfish/**  (run.bat downloads it there on Windows)
+  2. <repo>/bin/stockfish/**  (the launchers download it there)
   3. `stockfish` on PATH, /usr/games/stockfish  (Ubuntu: sudo apt install stockfish)
 
 Tuning: STOCKFISH_THREADS (default: half your CPU cores), STOCKFISH_HASH (MB, default 128).

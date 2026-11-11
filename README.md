@@ -15,8 +15,8 @@ model goes to them:
 | System | Launcher | Status |
 |---|---|---|
 | Linux (NVIDIA GPU recommended) | `queen_runner_linux.sh` | tested |
-| macOS (Apple Silicon, 16 GB+) | `queen_runner_mac.sh` or double-click `Queen Board.command` | in testing |
-| Windows | `run.bat` | untested; board + Stockfish only for now |
+| macOS (Apple Silicon, 16 GB+) | `queen_runner_mac.sh` or double-click `Queen Board.command` | tested |
+| Windows 10/11 | double-click `queen_runner_windows.bat` | **untested**: please report problems |
 
 **Linux:** open a terminal in this folder and run
 
@@ -38,6 +38,16 @@ installs PyTorch (a few GB), downloads Stockfish, and downloads QUEEN (~8.4 GB, 
 standard Hugging Face cache). Then it opens the board in your browser. Later runs start
 in seconds. Nothing is installed outside this folder except the model download.
 Press Ctrl+C or close the terminal window to stop.
+
+**Windows:** double-click **queen_runner_windows.bat**. If Windows shows "Windows protected
+your PC", click *More info* > *Run anyway*. If you don't have Python 3.10+, it fetches a
+private copy into `.tools\` in this folder. With an NVIDIA GPU it installs the GPU build
+of PyTorch automatically. To stop, close the window or press Ctrl+C (then `Y`).
+
+**How QUEEN runs is picked from your hardware** each time you start: an NVIDIA GPU with
+10 GB+ runs it at full size; 5.5–10 GB (e.g. most laptop GPUs) runs it shrunk to 4-bit
+(`nf4`, experimental); otherwise it uses the CPU. It tells you which, and warns if free
+memory is too low. `cpu: true` in the settings always wins.
 
 **Hardware:** QUEEN runs best on an NVIDIA GPU with 10 GB+ of memory (RTX 3080/3090/4080
 and up) or an Apple Silicon Mac with 16 GB+. Without either it runs on the CPU, which works

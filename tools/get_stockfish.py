@@ -1,6 +1,6 @@
 """Download Stockfish (a CPU-only chess engine) into bin/stockfish/.
 
-Called by run.bat and run.sh with the project's .venv Python. Standard library
+Called by the queen_runner_* launchers with the project's .venv Python. Standard library
 only, nothing installed system-wide. Does nothing if Stockfish is already found.
 
 It asks GitHub for the latest release, picks the build for this OS/CPU, and
