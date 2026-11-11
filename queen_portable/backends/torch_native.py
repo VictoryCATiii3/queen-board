@@ -87,7 +87,10 @@ class TorchNativeBackend:
         self.bridge.attach(self._decoder_layers())
 
         # --- board encoder (Leela BT5) ------------------------------------------------
-        self.encoder = Lc0.from_pretrained(str(model_dir / "lc0"), local_files_only=True)
+        # Not Lc0.from_pretrained: it can crash on the encoder's empty (unused) tensors
+        # on some platforms. See safe_load.py.
+        from ..safe_load import load_pretrained_safely
+        self.encoder = load_pretrained_safely(Lc0, model_dir / "lc0")
         self.encoder.to(device=self.device, dtype=self.dtype).eval()
 
     def _decoder_layers(self):
