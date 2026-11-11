@@ -13,7 +13,9 @@
 #  Needs an Apple Silicon Mac (M1 or newer) with 16 GB+ memory for QUEEN to run
 #  on the GPU. Intel Macs fall back to the CPU (very slow).
 #
-#  Optional settings, e.g.  HF_HOME=/Volumes/MyDrive/huggingface ./queen_runner_mac.sh
+#  Settings live in setup/settings.yaml (cpu, model, download_folder, port, ...).
+#  Anything below can also be given for one run on the command line, which wins
+#  over the file: e.g.  PORT=8080 ./queen_runner_mac.sh
 #    PORT=8000                    web port
 #    QUEEN_MODEL=hce-4            the other released checkpoint (default pawn-8)
 #    QUEEN_DEVICE=cpu             force CPU (very slow; default uses the Apple GPU)
@@ -25,34 +27,10 @@
 set -euo pipefail
 cd "$(cd "$(dirname "$0")" && pwd -P)"
 
-PORT="${PORT:-8000}"
-HOST="${HOST:-127.0.0.1}"
-URL="http://${HOST}:${PORT}"
-
 say()  { printf '\n\033[1;33m==>\033[0m %s\n' "$*"; }
 warn() { printf '\n\033[1;35m!!\033[0m  %s\n' "$*"; }
 fail() { printf '\n\033[1;31mError:\033[0m %s\n' "$*" >&2; read -rp "Press Enter to close..." _ || true; exit 1; }
 trap 'fail "something went wrong (see above)."' ERR
-
-# --- 0. This Mac ---------------------------------------------------------------
-# QUEEN runs in bfloat16, which the Mac GPU backend only supports on Apple Silicon
-# with macOS 14+. Anywhere else, use the CPU rather than fail.
-if [ "$(uname -m)" != "arm64" ] && [ -z "${QUEEN_URL:-}" ]; then
-  warn "This is an Intel Mac: QUEEN will run on the CPU, which can take minutes per move."
-  export QUEEN_DEVICE="${QUEEN_DEVICE:-cpu}"
-fi
-MEM_GB=$(( $(sysctl -n hw.memsize 2>/dev/null || echo 0) / 1073741824 ))
-if [ "$MEM_GB" -gt 0 ] && [ "$MEM_GB" -lt 16 ] && [ -z "${QUEEN_URL:-}" ]; then
-  warn "This Mac has ${MEM_GB} GB of memory. QUEEN needs about 9 GB on its own, so 16 GB+ is recommended."
-fi
-MACOS_MAJOR=$(sw_vers -productVersion 2>/dev/null | cut -d. -f1 || echo 0)
-if [ "${MACOS_MAJOR:-0}" -lt 14 ] && [ -z "${QUEEN_URL:-}" ]; then
-  warn "QUEEN needs macOS 14 (Sonoma) or newer to use the Apple GPU; using the CPU instead (very slow)."
-  export QUEEN_DEVICE="${QUEEN_DEVICE:-cpu}"
-fi
-# If PyTorch meets an operation the Apple GPU doesn't support yet, run just that
-# piece on the CPU instead of stopping with an error.
-export PYTORCH_ENABLE_MPS_FALLBACK=1
 
 # --- 1. Python 3.10+ (or a private copy via uv if the Mac doesn't have one) -----
 PY="${PYTHON:-}"
@@ -74,6 +52,36 @@ if [ -z "$PY" ]; then
   .tools/uv python install 3.12 >/dev/null || fail "couldn't install Python 3.12."
   PY="$(.tools/uv python find 3.12)"
 fi
+
+# --- Settings from setup/settings.yaml (the command line still wins) --------------
+SETTINGS_ENV="$("$PY" tools/settings.py --shell)" || fail "couldn't read setup/settings.yaml"
+eval "$SETTINGS_ENV"
+[ "${QUEEN_DEVICE:-}" = "cpu" ] && echo "Settings: running QUEEN on the CPU (cpu: true)."
+[ -n "${HF_HOME:-}" ] && echo "Settings: QUEEN downloads go to $HF_HOME"
+PORT="${PORT:-8000}"
+HOST="${HOST:-127.0.0.1}"
+URL="http://${HOST}:${PORT}"
+
+
+# --- This Mac ---------------------------------------------------------------
+# QUEEN runs in bfloat16, which the Mac GPU backend only supports on Apple Silicon
+# with macOS 14+. Anywhere else, use the CPU rather than fail.
+if [ "$(uname -m)" != "arm64" ] && [ -z "${QUEEN_URL:-}" ]; then
+  warn "This is an Intel Mac: QUEEN will run on the CPU, which can take minutes per move."
+  export QUEEN_DEVICE="${QUEEN_DEVICE:-cpu}"
+fi
+MEM_GB=$(( $(sysctl -n hw.memsize 2>/dev/null || echo 0) / 1073741824 ))
+if [ "$MEM_GB" -gt 0 ] && [ "$MEM_GB" -lt 16 ] && [ -z "${QUEEN_URL:-}" ]; then
+  warn "This Mac has ${MEM_GB} GB of memory. QUEEN needs about 9 GB on its own, so 16 GB+ is recommended."
+fi
+MACOS_MAJOR=$(sw_vers -productVersion 2>/dev/null | cut -d. -f1 || echo 0)
+if [ "${MACOS_MAJOR:-0}" -lt 14 ] && [ -z "${QUEEN_URL:-}" ]; then
+  warn "QUEEN needs macOS 14 (Sonoma) or newer to use the Apple GPU; using the CPU instead (very slow)."
+  export QUEEN_DEVICE="${QUEEN_DEVICE:-cpu}"
+fi
+# If PyTorch meets an operation the Apple GPU doesn't support yet, run just that
+# piece on the CPU instead of stopping with an error.
+export PYTORCH_ENABLE_MPS_FALLBACK=1
 
 # --- 2. Private environment in .venv --------------------------------------------
 export PIP_REQUIRE_VIRTUALENV=true PIP_DISABLE_PIP_VERSION_CHECK=1

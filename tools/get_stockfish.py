@@ -25,7 +25,31 @@ ROOT = Path(__file__).resolve().parents[1]
 DEST = ROOT / "bin" / "stockfish"
 API = "https://api.github.com/repos/official-stockfish/Stockfish/releases/latest"
 FEATURES = ("avx2", "avx512", "bmi2", "vnni", "sse41", "popcnt", "avxvnni", "zen")
-ARM = ("arm", "aarch64", "apple-silicon", "m1")
+# CPU architecture words that appear in Stockfish release names (old and new naming).
+ARCH_WORDS = {
+    "arm64": ("arm64", "aarch64", "armv8", "apple-silicon", "m1"),
+    "x86_64": ("x86-64", "x86_64", "amd64", "x64"),
+    "riscv64": ("riscv",),
+}
+
+
+def machine_arch(machine: str) -> str:
+    m = machine.lower()
+    if m in ("arm64", "aarch64", "armv8l"):
+        return "arm64"
+    if m.startswith("riscv"):
+        return "riscv64"
+    return "x86_64"
+
+
+def asset_arch(name: str) -> str | None:
+    """The CPU an asset is built for, or None if the name doesn't say
+    (macOS "universal" builds contain both Intel and Apple Silicon code)."""
+    low = name.lower()
+    for arch, words in ARCH_WORDS.items():
+        if any(w in low for w in words):
+            return arch
+    return None
 
 
 def has_avx2() -> bool:
@@ -43,7 +67,7 @@ def has_avx2() -> bool:
 def pick_assets(names: list[str], os_name: str, machine: str, avx2: bool) -> list[str]:
     """Best-first list of release assets to try for this machine."""
     os_words = {"nt": ("windows",), "linux": ("ubuntu", "linux"), "darwin": ("macos", "mac")}[os_name]
-    is_arm = machine.lower() in ("arm64", "aarch64")
+    want = machine_arch(machine)
     out = []
     for n in names:
         low = n.lower()
@@ -51,7 +75,13 @@ def pick_assets(names: list[str], os_name: str, machine: str, avx2: bool) -> lis
             continue
         if not low.endswith((".zip", ".tar", ".tar.gz", ".tgz")):
             continue
-        if any(a in low for a in ARM) != is_arm:
+        arch = asset_arch(n)
+        if arch is None:
+            # No CPU named: a macOS universal binary runs anywhere; elsewhere
+            # unnamed has always meant Intel/AMD.
+            if os_name != "darwin" and want != "x86_64":
+                continue
+        elif arch != want:
             continue
         out.append(n)
 
@@ -123,11 +153,13 @@ def main() -> int:
             release = json.load(r)
     except Exception as e:
         print(f"Stockfish: couldn't reach GitHub ({e}). Skipping; the board still works.")
+        _install_hint()
         return 0
     assets = {a["name"]: a["browser_download_url"] for a in release.get("assets", [])}
     choices = pick_assets(list(assets), os_name, platform.machine(), has_avx2())
     if not choices:
         print(f"Stockfish: no build found for this machine in {release.get('tag_name')}. Assets: {list(assets)}")
+        _install_hint()
         return 0
     for name in choices:
         print(f"Stockfish: downloading {release.get('tag_name')} / {name} ...")
@@ -151,7 +183,15 @@ def main() -> int:
                 return 0
             print("  that build doesn't run on this CPU, trying the next one")
     print("Stockfish: no working build found. Skipping; the board still works.")
+    _install_hint()
     return 0
+
+
+def _install_hint() -> None:
+    if sys.platform == "darwin":
+        print("  To add it yourself: install Homebrew (brew.sh), then run: brew install stockfish")
+    elif sys.platform.startswith("linux"):
+        print("  To add it yourself: sudo apt install stockfish")
 
 
 if __name__ == "__main__":

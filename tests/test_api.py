@@ -7,6 +7,9 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 os.environ.setdefault("STOCKFISH_PATH", str(HERE / "fake_uci.py"))
+import tempfile  # noqa: E402
+LOG_DIR = Path(tempfile.mkdtemp(prefix="queen-board-games-"))
+os.environ["GAMES_DIR"] = str(LOG_DIR)   # never write test games into the repo
 os.chmod(HERE / "fake_uci.py", 0o755)
 sys.path.insert(0, str(HERE.parent))
 
@@ -216,3 +219,50 @@ def test_swap_opponent_mid_game(fake_queen):
     assert "Random mover / Queen 4B" in s["pgn"]
     s = c.post("/api/opponent", json={"mode": "hotseat"}).json()
     assert s["mode"] == "hotseat" and not s["engine_to_move"] and len(s["history"]) == 4
+
+
+
+def _log_rows():
+    from server.app import game_log
+    return [json.loads(line) for line in game_log.path.read_text().splitlines()]
+
+
+def test_game_log_records_moves_engines_and_result(fake_queen):
+    c.post("/api/new", json={"mode": "engine", "engine": "stockfish"})
+    c.post("/api/move", json={"uci": "f2f3"})
+    c.post("/api/engine_move", json={})
+    c.post("/api/opponent", json={"mode": "engine", "engine": "queen"})
+    c.post("/api/move", json={"uci": "g2g4"})
+    c.post("/api/engine_move", json={})
+    c.post("/api/analyze", json={"engine": "queen", "question": "what now?"})
+    rows = _log_rows()
+    kinds = [r["event"] for r in rows]
+    assert kinds[0] == "game_start" and "opponent_change" in kinds and "analysis" in kinds
+    moves = [r for r in rows if r["event"] == "move"]
+    assert [m["by"] for m in moves] == ["Human", "Stockfish (level 20)", "Human", "Queen 4B"]
+    assert moves[0]["response"] is None                      # humans don't respond
+    assert "line" in moves[1]["response"] or "depth" in moves[1]["response"]  # Stockfish's search info
+    assert moves[3]["response"]["text"]                       # Queen's explanation
+    assert [r for r in rows if r["event"] == "analysis"][0]["question"] == "what now?"
+    from server.app import game_log
+    assert "1. f3" in game_log.path.with_suffix(".pgn").read_text()
+
+
+def test_game_log_result_once_and_hotseat_names():
+    c.post("/api/new", json={"mode": "hotseat"})
+    for m in ["f2f3", "e7e5", "g2g4", "d8h4"]:
+        c.post("/api/move", json={"uci": m})
+    c.get("/api/state")
+    rows = _log_rows()
+    assert [r["by"] for r in rows if r["event"] == "move"][:2] == ["Human (White)", "Human (Black)"]
+    over = [r for r in rows if r["event"] == "game_over"]
+    assert len(over) == 1 and over[0]["result"] == "0-1" and over[0]["reason"] == "checkmate"
+    c.post("/api/undo", json={})
+    assert _log_rows()[-1]["event"] == "undo"
+
+
+def test_save_games_off(monkeypatch):
+    monkeypatch.setenv("SAVE_GAMES", "0")
+    c.post("/api/new", json={"mode": "hotseat"})
+    from server.app import game_log
+    assert game_log.path is None

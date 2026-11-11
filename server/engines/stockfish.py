@@ -30,9 +30,15 @@ def _find_binary() -> str | None:
         for p in sorted(REPO_BIN.rglob("stockfish*")):
             if p.is_file() and (p.suffix.lower() == ".exe" or (os.name != "nt" and os.access(p, os.X_OK))):
                 return str(p)
-    return shutil.which("stockfish") or (
-        "/usr/games/stockfish" if os.path.exists("/usr/games/stockfish") else None
-    )
+    found = shutil.which("stockfish")
+    if found:
+        return found
+    # Common install spots that may not be on PATH when launched by double-click
+    # (Debian/Ubuntu package, Homebrew on Apple Silicon and Intel Macs).
+    for p in ("/usr/games/stockfish", "/opt/homebrew/bin/stockfish", "/usr/local/bin/stockfish"):
+        if os.path.exists(p):
+            return p
+    return None
 
 
 class StockfishEngine(Engine):
@@ -81,10 +87,24 @@ class StockfishEngine(Engine):
             await self._engine.configure({"Skill Level": self.skill_level})
 
     async def choose_move(self, board: chess.Board) -> chess.Move:
+        return (await self.choose_move_detailed(board))[0]
+
+    async def choose_move_detailed(self, board: chess.Board) -> tuple[chess.Move, dict | None]:
         await self.start()
         assert self._engine
-        result = await self._engine.play(board, chess.engine.Limit(time=self.think_time))
-        return result.move
+        result = await self._engine.play(board, chess.engine.Limit(time=self.think_time),
+                                         info=chess.engine.INFO_SCORE | chess.engine.INFO_PV)
+        info = result.info or {}
+        details: dict = {"skill_level": self.skill_level, "think_time": self.think_time,
+                         "depth": info.get("depth"), "nodes": info.get("nodes")}
+        score = info.get("score")
+        if score is not None:
+            white = score.white()
+            details["mate_in"] = white.mate()
+            details["eval_cp"] = white.score() if white.mate() is None else None
+        if info.get("pv"):
+            details["line"] = [m.uci() for m in info["pv"]]
+        return result.move, details
 
     async def analyze(self, board: chess.Board, question: str | None = None) -> Analysis:
         await self.start()

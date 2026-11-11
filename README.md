@@ -53,26 +53,46 @@ but can take minutes per move.
   on a single fixed analysis prompt, so it usually gives its standard analysis anyway.
 - **Undo** takes back your last move (and the engine's reply). **Start from a position**
   takes any FEN.
+- **Swap opponents mid-game** any time: the new one takes over the current position.
 
 QUEEN's moves are strong (about 2,700 Elo in the paper), but its explanations can contain
 mistakes even when the move is right.
 
 ## Settings
 
-Set these before the launcher, e.g. `QUEEN_MODEL=hce-4 ./queen_runner_linux.sh`.
+Open **`setup/settings.yaml`** in any text editor, change a value, save, and run the
+launcher again. Each setting is explained in the file.
 
-| Variable | Default | What it does |
+| Setting | Default | What it does |
 |---|---|---|
-| `PORT` | `8000` | Web port |
-| `QUEEN_MODEL` | `pawn-8` | `pawn-8` (stronger) or `hce-4` |
-| `QUEEN_DEVICE` | auto | `cuda`, `mps`, or `cpu` |
-| `QUEEN_QUANTIZE` | off | `int8` or `nf4`: smaller memory for NVIDIA GPUs under ~10 GB (experimental) |
-| `QUEEN_MODEL_DIR` | | Use a QUEEN checkpoint folder you've already downloaded |
-| `QUEEN_URL` | | Use QUEEN running on another machine (see below) |
-| `HF_HOME` | `~/.cache/huggingface` | Where Hugging Face stores the model (e.g. an external drive) |
-| `STOCKFISH_PATH` | auto | Stockfish binary to use |
-| `STOCKFISH_TIME` / `STOCKFISH_THREADS` / `STOCKFISH_HASH` | `0.5` s / half your cores / `128` MB | Stockfish tuning |
-| `NO_BROWSER` | | `1` = don't open a browser |
+| `cpu` | `false` | `true` = run QUEEN on the CPU (any computer, very slow). `false` = NVIDIA or Apple GPU when available |
+| `model` | `pawn-8` | `pawn-8` (stronger) or `hce-4` |
+| `quantize` | off | `int8` or `nf4`: fit NVIDIA GPUs under ~10 GB (experimental) |
+| `download_folder` | Hugging Face default | Where the ~8.4 GB model downloads (e.g. an external drive) |
+| `model_folder` | | A QUEEN folder you've already downloaded |
+| `queen_url` | | Use QUEEN running on another computer (see below) |
+| `port` | `8000` | The board's web port |
+| `open_browser` | `true` | Open the browser automatically |
+| `save_games` | `true` | Keep a log of every game in `games/` |
+| `stockfish_time` | `0.5` | Seconds Stockfish thinks per move |
+
+For a single run you can also set things on the command line, which wins over the file,
+e.g. `PORT=8080 ./queen_runner_linux.sh`. The underlying environment variables
+(`QUEEN_DEVICE`, `QUEEN_MODEL`, `HF_HOME`, `STOCKFISH_PATH`, ...) are listed in
+`tools/settings.py`.
+
+## Game logs
+
+Every game is saved in **`games/`** as two files named by when it started:
+
+- `2026-11-10_23-41-05.pgn` — the game itself, updated after every move. Opens in any
+  chess program or site (e.g. Lichess's import page).
+- `2026-11-10_23-41-05.jsonl` — everything that happened, one entry per line: each move
+  with who played it (you, Stockfish at what level, QUEEN), QUEEN's full explanation for
+  its moves, Stockfish's evaluation and planned line, every analysis you asked for and
+  your question, opponent swaps, undos, and the result.
+
+Set `save_games: false` to turn this off.
 
 ### QUEEN on another machine
 
@@ -114,7 +134,9 @@ encoding, move parsing) is loaded from the downloaded model folder, not copied h
 queen_portable/   QUEEN without vLLM: model loading, the bridge, CLI, HTTP server
 server/           the board's API (FastAPI) and engine adapters (queen, stockfish, random)
 web/              the board itself (plain HTML/JS/SVG, no build step)
-tools/            Stockfish downloader, bridge equivalence check
+tools/            Stockfish downloader, settings reader, bridge equivalence check
+setup/            settings.yaml: the settings you edit
+games/            your saved games (created on first game)
 ```
 
 Each piece works on its own: `queen_portable` can be used without the board, and the board
@@ -154,7 +176,7 @@ To add an engine, subclass `server/engines/base.py:Engine` and register it in
 .venv/bin/python -m pytest -q
 ```
 
-Tests use stand-ins for Stockfish and QUEEN, so they run without a GPU or model download.
+Tests use stand-ins for Stockfish and QUEEN, write their game logs to a temporary folder, so they run without a GPU or model download.
 
 ## Licensing
 

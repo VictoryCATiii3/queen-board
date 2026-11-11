@@ -62,5 +62,10 @@ class Engine:
             raise RuntimeError(f"{self.name} returned no move")
         return chess.Move.from_uci(analysis.best_move)
 
+    async def choose_move_detailed(self, board: chess.Board) -> tuple[chess.Move, dict | None]:
+        """The move plus whatever the engine reported while choosing it (for the game log).
+        Engines that report nothing just return their move."""
+        return await self.choose_move(board), None
+
     async def analyze(self, board: chess.Board, question: str | None = None) -> Analysis:
         raise NotImplementedError

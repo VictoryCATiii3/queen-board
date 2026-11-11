@@ -9,7 +9,9 @@
 #  opens the board in your browser. Later runs start in seconds.
 #  Nothing is installed system-wide. Ctrl+C (or closing this window) stops it.
 #
-#  Optional settings, e.g.  PORT=8080 ./queen_runner_linux.sh
+#  Settings live in setup/settings.yaml (cpu, model, port, ...). Anything below
+#  can also be given for one run on the command line, which wins over the file:
+#  e.g.  PORT=8080 ./queen_runner_linux.sh
 #    PORT=8000                    web port
 #    QUEEN_MODEL=hce-4            the other released checkpoint (default pawn-8)
 #    QUEEN_DEVICE=cpu             force CPU (very slow; auto-picks NVIDIA if present)
@@ -33,10 +35,6 @@ if [ ! -t 1 ] && [ -z "${QUEEN_IN_TERMINAL:-}" ]; then
   done
 fi
 
-PORT="${PORT:-8000}"
-HOST="${HOST:-127.0.0.1}"
-URL="http://${HOST}:${PORT}"
-
 say()  { printf '\n\033[1;33m==>\033[0m %s\n' "$*"; }
 fail() { printf '\n\033[1;31mError:\033[0m %s\n' "$*" >&2; read -rp "Press Enter to close..." _ || true; exit 1; }
 
@@ -53,6 +51,14 @@ if [ -z "$PY" ]; then
   done
 fi
 [ -n "$PY" ] || fail "Python 3.10 or newer is needed. On Ubuntu: sudo apt install python3 python3-venv"
+
+# --- Settings from setup/settings.yaml (the command line still wins) --------------
+SETTINGS_ENV="$("$PY" tools/settings.py --shell)" || fail "couldn't read setup/settings.yaml"
+eval "$SETTINGS_ENV"
+[ "${QUEEN_DEVICE:-}" = "cpu" ] && echo "Settings: running QUEEN on the CPU (cpu: true)."
+PORT="${PORT:-8000}"
+HOST="${HOST:-127.0.0.1}"
+URL="http://${HOST}:${PORT}"
 
 # --- 2. Private environment in .venv --------------------------------------------
 export PIP_REQUIRE_VIRTUALENV=true PIP_DISABLE_PIP_VERSION_CHECK=1

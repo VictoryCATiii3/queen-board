@@ -23,6 +23,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from .game_log import GameLog
 from .engines import ENGINES, Engine
 
 WEB = Path(__file__).resolve().parent.parent / "web"
@@ -62,6 +63,7 @@ class Game:
 
 
 game = Game()
+game_log = GameLog()
 _engines: dict[str, Engine] = {}
 
 
@@ -117,6 +119,33 @@ def analysis_payload(board: chess.Board, a, eng_name: str) -> dict:
     d["line_san"] = line_san
     d["fen"] = board.fen()
     return d
+
+
+def _queen_settings() -> dict:
+    keys = ("QUEEN_MODEL", "QUEEN_DEVICE", "QUEEN_QUANTIZE", "QUEEN_URL")
+    return {k.lower()[6:]: os.environ[k] for k in keys if os.environ.get(k)}
+
+
+def _who(color: chess.Color) -> str:
+    """Who is playing this colour right now, for the log."""
+    side = "White" if color == chess.WHITE else "Black"
+    if game.mode == "hotseat":
+        return f"Human ({side})"
+    if color == game.human_color:
+        return "Human"
+    return _opponent_label() or "?"
+
+
+def _log_move(before: chess.Board, mv: chess.Move, response: dict | None = None) -> None:
+    game_log.event("move", ply=len(before.move_stack) + 1, move_number=before.fullmove_number,
+                   color="white" if before.turn else "black", by=_who(before.turn),
+                   san=before.san(mv), uci=mv.uci(), fen_before=before.fen(),
+                   fen_after=game.board.fen(), response=response)
+    game_log.write_pgn(pgn())
+    o = outcome_info(game.board)
+    if o:
+        game_log.finish(result=game.board.result(claim_draw=True), **o,
+                        white=_player(chess.WHITE), black=_player(chess.BLACK))
 
 
 def state() -> dict:
@@ -251,6 +280,9 @@ def new_game(req: NewGame):
     game.engine_explanation = None
     game.opponents = []
     _note_opponent()
+    game_log.start(start_fen=game.start_fen, mode=game.mode, opponent=_opponent_label(),
+                   human_color="white" if game.human_color else "black",
+                   queen=_queen_settings())
     return state()
 
 
@@ -263,9 +295,13 @@ def change_opponent(req: OpponentIn):
         get_engine(req.engine)
         if game.mode == "hotseat" and req.human_color:
             game.human_color = chess.WHITE if req.human_color == "white" else chess.BLACK
+    old = _opponent_label() or "nobody (both sides human)"
     game.mode = req.mode
     game.engine_name = req.engine if req.mode == "engine" else None
     _note_opponent()
+    new = _opponent_label() or "nobody (both sides human)"
+    if new != old:
+        game_log.event("opponent_change", ply=len(game.board.move_stack), old=old, new=new)
     return state()
 
 
@@ -279,7 +315,9 @@ def make_move(req: MoveIn):
         raise HTTPException(400, f"Not a UCI move: {req.uci}")
     if mv not in game.board.legal_moves:
         raise HTTPException(400, f"Illegal move: {req.uci}")
+    before = game.board.copy()
     game.board.push(mv)
+    _log_move(before, mv)
     return state()
 
 
@@ -303,13 +341,17 @@ async def engine_move():
             explanation = analysis_payload(before, a, eng.name)
             explanation["ply"] = len(before.move_stack) + 1
         else:
-            mv = await eng.choose_move(before.copy())
+            mv, details = await eng.choose_move_detailed(before.copy())
     except Exception as e:  # surface engine errors to the UI
+        game_log.event("engine_error", ply=len(before.move_stack) + 1, engine=eng.name, error=str(e))
         raise HTTPException(500, f"{eng.name} failed: {e}")
     if mv not in game.board.legal_moves:
+        game_log.event("engine_error", ply=len(before.move_stack) + 1, engine=eng.name,
+                       error=f"illegal move {mv.uci()}")
         raise HTTPException(500, f"{eng.name} suggested an illegal move: {mv.uci()}")
     game.board.push(mv)
     game.engine_explanation = explanation
+    _log_move(before, mv, explanation if eng.can_explain else details)
     return state()
 
 
@@ -318,9 +360,14 @@ def undo():
     """Hotseat: take back one ply. Engine mode: take back to the human's turn."""
     if not game.board.move_stack:
         return state()
-    game.board.pop()
+    was_over = game.board.is_game_over(claim_draw=True)
+    taken = [game.board.pop().uci()]
     if game.mode == "engine" and game.board.move_stack and game.board.turn != game.human_color:
-        game.board.pop()
+        taken.insert(0, game.board.pop().uci())
+    game_log.event("undo", moves_taken_back=taken, fen_after=game.board.fen())
+    game_log.write_pgn(pgn())
+    if was_over:
+        game_log.reopen()
     ex = game.engine_explanation
     if ex and ex.get("ply", 0) > len(game.board.move_stack):
         game.engine_explanation = None  # that move was taken back
@@ -339,7 +386,10 @@ async def analyze(req: AnalyzeIn):
         a = await eng.analyze(game.board.copy(), req.question)
     except Exception as e:
         raise HTTPException(500, f"{eng.name} failed: {e}")
-    return analysis_payload(game.board, a, eng.name)
+    payload = analysis_payload(game.board, a, eng.name)
+    game_log.event("analysis", ply=len(game.board.move_stack), fen=game.board.fen(),
+                   engine=eng.name, question=req.question, response=payload)
+    return payload
 
 
 @app.post("/api/stockfish/skill")
