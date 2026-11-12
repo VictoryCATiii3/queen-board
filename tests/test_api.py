@@ -309,3 +309,11 @@ def test_each_game_gets_its_own_queen_seed(fake_queen):
     from server.app import game_log
     start = json.loads(game_log.path.read_text().splitlines()[0])
     assert start["game_id"] == b1
+
+
+
+def test_page_and_scripts_are_never_served_stale():
+    """Safari reused an old board.js after updates when no cache rule was sent."""
+    for path in ("/", "/static/board.js", "/static/style.css"):
+        r = c.get(path)
+        assert r.status_code == 200 and r.headers["cache-control"] == "no-cache", path

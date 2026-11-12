@@ -435,6 +435,18 @@ async def stockfish_skill(req: SkillIn):
     return {"skill": eng.skill_level}  # type: ignore[attr-defined]
 
 
+@app.middleware("http")
+async def always_fresh_page(request, call_next):
+    """Make browsers check for a newer page/script on every load. Without this,
+    Safari kept running an old board.js after an update (it guesses its own cache
+    lifetime when none is given). The files are served from this computer, so the
+    check costs nothing; unchanged files still come back as a quick 304."""
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 @app.get("/")
 def index():
     return FileResponse(WEB / "index.html")
