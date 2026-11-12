@@ -62,9 +62,6 @@ function draw() {
   const g = el("radialGradient", { id: "checkGrad" }, defs);
   el("stop", { offset: "0%", "stop-color": "rgb(255,60,40)", "stop-opacity": ".95" }, g);
   el("stop", { offset: "100%", "stop-color": "rgb(255,60,40)", "stop-opacity": "0" }, g);
-  const mk = el("marker", { id: "ah", viewBox: "0 0 10 10", refX: "5", refY: "5", markerWidth: "3.2",
-    markerHeight: "3.2", orient: "auto-start-reverse" }, defs);
-  el("path", { d: "M0,0 L10,5 L0,10 z", fill: "context-stroke" }, mk);
 
   // squares
   for (let r = 0; r < 8; r++) for (let f = 0; f < 8; f++) {
@@ -107,13 +104,24 @@ function draw() {
   }
 
   // arrows
+  // Each arrow is a shaft plus its own triangle head, in one group whose opacity
+  // applies to both (so the overlap doesn't show darker). No SVG <marker>: Safari
+  // doesn't support fill="context-stroke", which made the heads black on Macs.
+  const HEAD_LEN = 46, HEAD_HALF = 22, TIP_GAP = 4;
   for (const a of arrows) {
     const [x1, y1] = sqXY(a.from), [x2, y2] = sqXY(a.to);
     const cx1 = x1 + S / 2, cy1 = y1 + S / 2, cx2 = x2 + S / 2, cy2 = y2 + S / 2;
-    const len = Math.hypot(cx2 - cx1, cy2 - cy1), k = (len - 26) / len;
-    el("line", { x1: cx1, y1: cy1, x2: cx1 + (cx2 - cx1) * k, y2: cy1 + (cy2 - cy1) * k,
-      stroke: a.color || "rgb(230,160,40)", "stroke-opacity": a.alpha, "stroke-width": 16,
-      "stroke-linecap": "round", "marker-end": "url(#ah)", "pointer-events": "none" });
+    const len = Math.hypot(cx2 - cx1, cy2 - cy1);
+    const ux = (cx2 - cx1) / len, uy = (cy2 - cy1) / len;      // direction
+    const tipX = cx2 - ux * TIP_GAP, tipY = cy2 - uy * TIP_GAP;
+    const baseX = tipX - ux * HEAD_LEN, baseY = tipY - uy * HEAD_LEN;
+    const color = a.color || "rgb(230,160,40)";
+    const grp = el("g", { opacity: a.alpha, "pointer-events": "none", class: "arrow" });
+    el("line", { x1: cx1, y1: cy1, x2: baseX + ux * 2, y2: baseY + uy * 2,
+      stroke: color, "stroke-width": 16, "stroke-linecap": "round" }, grp);
+    el("polygon", { fill: color, points: [
+      [tipX, tipY], [baseX - uy * HEAD_HALF, baseY + ux * HEAD_HALF], [baseX + uy * HEAD_HALF, baseY - ux * HEAD_HALF],
+    ].map((pt) => pt.join(",")).join(" ") }, grp);
   }
 }
 
