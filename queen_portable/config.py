@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import argparse
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 # Both released checkpoints share the same code; switching is just this id.
@@ -29,17 +29,23 @@ def _env(name: str) -> str | None:
     return os.environ.get(name) or None
 
 
+def _from_env(name: str, default: str | None = None):
+    """Dataclass default that reads the environment when a config is created
+    (not once at import), so settings applied later are still seen."""
+    return field(default_factory=lambda: _env(name) or default)
+
+
 @dataclass
 class QueenConfig:
-    model: str = _env("QUEEN_MODEL") or "pawn-8"
+    model: str = _from_env("QUEEN_MODEL", "pawn-8")
     # A folder that already holds a checkpoint. Skips downloading entirely.
-    model_dir: str | None = _env("QUEEN_MODEL_DIR")
-    revision: str | None = _env("QUEEN_REVISION")
-    backend: str = _env("QUEEN_BACKEND") or "torch"        # "torch" | "vllm"
-    device: str = _env("QUEEN_DEVICE") or "auto"           # "auto" | "cuda" | "mps" | "cpu"
-    quantize: str | None = _env("QUEEN_QUANTIZE")          # None | "int8" | "nf4" (NVIDIA only)
+    model_dir: str | None = _from_env("QUEEN_MODEL_DIR")
+    revision: str | None = _from_env("QUEEN_REVISION")
+    backend: str = _from_env("QUEEN_BACKEND", "torch")       # "torch" | "vllm"
+    device: str = _from_env("QUEEN_DEVICE", "auto")          # "auto" | "cuda" | "mps" | "cpu"
+    quantize: str | None = _from_env("QUEEN_QUANTIZE")       # None | "int8" | "nf4" (NVIDIA only)
     # Python of upstream's own venv; only the vllm reference backend needs it.
-    upstream_python: str | None = _env("QUEEN_UPSTREAM_PYTHON")
+    upstream_python: str | None = _from_env("QUEEN_UPSTREAM_PYTHON")
 
     @property
     def repo_id(self) -> str:

@@ -16,7 +16,27 @@ import sys
 from .config import add_config_args, config_from_args, pick_device
 
 
+def _apply_settings_file(settings_file=None) -> None:
+    """Use setup/settings.yaml when run from a Queen Board folder, so `queen ...`
+    sees the same settings as the launchers (env vars already set still win).
+    Must run before huggingface_hub is imported: it reads HF_HOME at import."""
+    import importlib.util
+    import os
+    from pathlib import Path
+    tool = Path(__file__).resolve().parents[1] / "tools" / "settings.py"
+    if not tool.exists():
+        return  # queen_portable used on its own
+    spec = importlib.util.spec_from_file_location("_queen_board_settings", tool)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    values, warnings = mod.read_settings(settings_file) if settings_file else mod.read_settings()
+    for w in warnings:
+        print(f"setup/settings.yaml {w}", file=sys.stderr)
+    os.environ.update(mod.to_env(values))
+
+
 def main(argv: list[str] | None = None) -> None:
+    _apply_settings_file()
     p = argparse.ArgumentParser(prog="queen", description="Run Princeton's QUEEN chess model locally (unofficial).")
     sub = p.add_subparsers(dest="cmd", required=True)
 

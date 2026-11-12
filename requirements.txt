@@ -1,6 +1,10 @@
-fastapi>=0.115
-uvicorn[standard]>=0.30
-chess>=1.10
-# tests
-pytest>=8
-httpx>=0.27
+# Queen Board's dependencies are listed in pyproject.toml, and the launchers
+# (queen_runner_*) install them for you. This file is for manual installs:
+#
+#   python -m venv .venv          then activate it, and from this folder:
+#   pip install -r requirements.txt
+#
+# which is the same as  pip install -e ".[torch]"
+# Windows with an NVIDIA GPU: install PyTorch first from https://pytorch.org
+# (the default Windows build is CPU-only).
+-e .[torch]

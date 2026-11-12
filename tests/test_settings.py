@@ -36,3 +36,25 @@ def test_command_line_wins(tmp_path):
 def test_bad_values_warn_not_crash(tmp_path):
     values, warnings = settings.read_settings(write(tmp_path, "cpu: maybe\nquantize: q4\ncolour: blue\nport 8000\n"))
     assert values == {} and len(warnings) == 4
+
+
+
+def test_queen_config_reads_env_when_created(monkeypatch):
+    """Regression: defaults used to be frozen when the module was first imported."""
+    from queen_portable.config import QueenConfig
+    monkeypatch.setenv("QUEEN_DEVICE", "cpu")
+    assert QueenConfig().device == "cpu"
+    monkeypatch.delenv("QUEEN_DEVICE")
+    assert QueenConfig().device == "auto"
+
+
+def test_queen_command_applies_settings_file(tmp_path, monkeypatch):
+    import os
+    from queen_portable.cli import _apply_settings_file
+    from queen_portable.config import QueenConfig
+    for k in ("QUEEN_DEVICE", "QUEEN_MODEL", "HF_HOME"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("QUEEN_MODEL", "pawn-8")   # set by the user: must win over the file
+    _apply_settings_file(write(tmp_path, "cpu: true\nmodel: hce-4\ndownload_folder: /drive/hf\n"))
+    cfg = QueenConfig()
+    assert (cfg.device, cfg.model, os.environ["HF_HOME"]) == ("cpu", "pawn-8", "/drive/hf")
