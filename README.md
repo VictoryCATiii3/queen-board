@@ -210,6 +210,10 @@ run through ordinary `transformers` on NVIDIA GPUs, Apple Silicon or the CPU. QU
 helper code (board encoding, move parsing) is loaded from the downloaded model, not copied
 into this repository.
 
+The download is pinned to the exact QUEEN version this project was tested with
+(`PINNED_REVISIONS` in `queen_portable/config.py`), so later changes to the model's
+Hugging Face page can't break an install. Set `QUEEN_REVISION` to try a different one.
+
 ```
 queen_portable/   QUEEN without vLLM: model loading, the bridge, CLI, HTTP server
 server/           the board's API (FastAPI) and engines (queen, stockfish, random), game logs

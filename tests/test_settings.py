@@ -58,3 +58,11 @@ def test_queen_command_applies_settings_file(tmp_path, monkeypatch):
     _apply_settings_file(write(tmp_path, "cpu: true\nmodel: hce-4\ndownload_folder: /drive/hf\n"))
     cfg = QueenConfig()
     assert (cfg.device, cfg.model, os.environ["HF_HOME"]) == ("cpu", "pawn-8", "/drive/hf")
+
+
+
+def test_default_model_is_pinned_to_a_tested_commit():
+    import re
+    from queen_portable.config import PINNED_REVISIONS, QueenConfig
+    sha = PINNED_REVISIONS[QueenConfig(model="pawn-8").repo_id]
+    assert sha and re.fullmatch(r"[0-9a-f]{40}", sha)

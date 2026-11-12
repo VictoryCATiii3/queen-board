@@ -20,7 +20,9 @@ MODELS = {
 # Exact upstream commits we've tested against. Pinning means a future upstream
 # change can't silently break installs. None = latest (until we record a sha).
 PINNED_REVISIONS: dict[str, str | None] = {
-    "princeton-nlp/queen_pawn-8": None,
+    # Tested on Linux (RTX 3090), macOS (M4) and Windows (laptop GPU, nf4), Nov 2026.
+    "princeton-nlp/queen_pawn-8": "5027687fac08b64b2403b13aca5b198e68294fe9",
+    # Not tested with this runner yet: follows upstream's latest.
     "princeton-nlp/queen_hce-4": None,
 }
 
