@@ -62,9 +62,10 @@ class TorchNativeBackend:
 
         # --- decoder (SmolLM3), optionally quantized ---------------------------------
         load_kw: dict = dict(dtype=self.dtype, device_map={"": self.device})
+        if cfg.quantize and self.device != "cuda":
+            print(f"QUEEN: quantize={cfg.quantize} only works on NVIDIA GPUs; running full size on {self.device}.")
+            cfg.quantize = None
         if cfg.quantize:
-            if self.device != "cuda":
-                raise ValueError("QUEEN_QUANTIZE needs an NVIDIA GPU (bitsandbytes); run unquantized on mps/cpu")
             from transformers import BitsAndBytesConfig
             if cfg.quantize == "int8":
                 qc = BitsAndBytesConfig(load_in_8bit=True, llm_int8_skip_modules=["lm_head"])

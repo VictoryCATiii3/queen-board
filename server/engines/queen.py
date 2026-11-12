@@ -112,6 +112,13 @@ class QueenEngine(Engine):
     def __init__(self) -> None:
         self.transport = make_transport()
         self._lock = asyncio.Lock()  # one position at a time on one model
+        self.game_id = 0
+
+    def new_game(self, game_id: int) -> None:
+        # QUEEN samples its answers; the seed comes from (game id, move number). A fresh
+        # id per game means it doesn't replay identical games, while one game stays
+        # reproducible (the id is in the game log).
+        self.game_id = game_id
 
     async def available(self) -> tuple[bool, str]:
         return await asyncio.to_thread(self.transport.available)
@@ -142,7 +149,7 @@ class QueenEngine(Engine):
         for mv in board.move_stack:  # earlier positions, oldest first, excluding current
             history.append(replay.fen())
             replay.push(mv)
-        payload = {"fen": board.fen(), "history": history, "game_id": 0}
+        payload = {"fen": board.fen(), "history": history, "game_id": self.game_id}
         if question:
             payload["prompt"] = question
         async with self._lock:

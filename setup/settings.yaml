@@ -17,8 +17,8 @@ cpu: false
 # Which QUEEN checkpoint: pawn-8 (stronger, default) or hce-4.
 model: pawn-8
 
-# Shrink QUEEN to fit smaller NVIDIA GPUs (under ~10 GB): int8 or nf4.
-# Experimental, NVIDIA only. Blank = off.
+# Shrink QUEEN to fit smaller NVIDIA GPUs: int8 or nf4. NVIDIA only.
+# Blank = automatic: nf4 is used on its own for GPUs with 5.5-10 GB.
 quantize:
 
 # Where to download QUEEN (~8.4 GB). Blank = the standard Hugging Face folder

@@ -1,7 +1,9 @@
 """Queen Board — local chess server.
 
-Run:  uvicorn server.app:app --reload --port 8000
+Run:  uvicorn server.app:app --port 8000      (the launchers do this for you)
 Then open http://localhost:8000
+Don't use --reload on Windows: it switches to an event loop that can't start
+subprocesses, which breaks Stockfish.
 
 The server owns the game (python-chess validates every move). The web page
 is just a view: it asks for state, sends moves, and asks engines to play
@@ -12,6 +14,7 @@ from __future__ import annotations
 
 import io
 import os
+import random
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
@@ -53,13 +56,38 @@ class Game:
         self.engine_explanation: dict | None = None
         # Every opponent used this game, in order, for the PGN (opponents can swap mid-game).
         self.opponents: list[str] = []
+        # Random per game. Engines that sample (Queen) seed from it, so games differ
+        # but any one game can be reproduced from its log.
+        self.game_id: int = 0
+
+    def over(self) -> bool:
+        return game_over(self.board)
 
     def engine_to_move(self) -> bool:
-        return (
-            self.mode == "engine"
-            and not self.board.is_game_over()
-            and self.board.turn != self.human_color
-        )
+        return self.mode == "engine" and not self.over() and self.board.turn != self.human_color
+
+
+def final_outcome(board: chess.Board) -> tuple[str | None, str, str] | None:
+    """(winner "white"/"black"/None, reason, PGN result) if the game has ended, else None.
+
+    The one definition used everywhere (banner, engines, legal moves, logs, PGN).
+    Besides checkmate/stalemate/etc., threefold repetition and the 50-move rule end
+    the game automatically, like on most chess sites, but only once they have
+    actually happened. (python-chess's claim_draw=True also counts a draw the
+    player *could* claim with their next move, which would end games early.)"""
+    o = board.outcome()
+    if o is not None:
+        winner = None if o.winner is None else ("white" if o.winner else "black")
+        return winner, o.termination.name.replace("_", " ").lower(), o.result()
+    if board.is_repetition(3):
+        return None, "threefold repetition", "1/2-1/2"
+    if board.halfmove_clock >= 100:
+        return None, "fifty moves", "1/2-1/2"
+    return None
+
+
+def game_over(board: chess.Board) -> bool:
+    return final_outcome(board) is not None
 
 
 game = Game()
@@ -72,32 +100,22 @@ def get_engine(name: str) -> Engine:
         raise HTTPException(404, f"Unknown engine '{name}'")
     if name not in _engines:
         _engines[name] = ENGINES[name]()
+        _engines[name].new_game(game.game_id)
     return _engines[name]
 
 
 def result_text(board: chess.Board) -> str | None:
-    if not board.is_game_over(claim_draw=True):
+    f = final_outcome(board)
+    if f is None:
         return None
-    outcome = board.outcome(claim_draw=True)
-    if outcome is None:
-        return None
-    if outcome.winner is None:
-        return f"Draw — {outcome.termination.name.replace('_', ' ').lower()}"
-    who = "White" if outcome.winner else "Black"
-    return f"{who} wins — {outcome.termination.name.lower()}"
+    winner, reason, _ = f
+    return f"Draw — {reason}" if winner is None else f"{winner.title()} wins — {reason}"
 
 
 def outcome_info(board: chess.Board) -> dict | None:
     """Structured result so the UI can say "You win" / "You lose" / "Draw"."""
-    if not board.is_game_over(claim_draw=True):
-        return None
-    outcome = board.outcome(claim_draw=True)
-    if outcome is None:
-        return None
-    return {
-        "winner": None if outcome.winner is None else ("white" if outcome.winner else "black"),
-        "reason": outcome.termination.name.replace("_", " ").lower(),
-    }
+    f = final_outcome(board)
+    return None if f is None else {"winner": f[0], "reason": f[1]}
 
 
 def analysis_payload(board: chess.Board, a, eng_name: str) -> dict:
@@ -144,7 +162,7 @@ def _log_move(before: chess.Board, mv: chess.Move, response: dict | None = None)
     game_log.write_pgn(pgn())
     o = outcome_info(game.board)
     if o:
-        game_log.finish(result=game.board.result(claim_draw=True), **o,
+        game_log.finish(result=final_outcome(game.board)[2], **o,
                         white=_player(chess.WHITE), black=_player(chess.BLACK))
 
 
@@ -162,7 +180,7 @@ def state() -> dict:
     return {
         "fen": b.fen(),
         "turn": "white" if b.turn else "black",
-        "legal": [m.uci() for m in b.legal_moves],
+        "legal": [] if game.over() else [m.uci() for m in b.legal_moves],
         "history": san,
         "last_move": b.move_stack[-1].uci() if b.move_stack else None,
         "check": king_in_check,
@@ -214,6 +232,8 @@ def pgn() -> str:
     g.headers["Event"] = "Queen Board"
     g.headers["White"] = _player(chess.WHITE)
     g.headers["Black"] = _player(chess.BLACK)
+    f = final_outcome(game.board)
+    g.headers["Result"] = f[2] if f else "*"
     buf = io.StringIO()
     print(g, file=buf, end="")
     return buf.getvalue()
@@ -279,10 +299,13 @@ def new_game(req: NewGame):
     game.human_color = chess.WHITE if req.human_color == "white" else chess.BLACK
     game.engine_explanation = None
     game.opponents = []
+    game.game_id = random.randrange(1, 2**31)
+    for e in _engines.values():
+        e.new_game(game.game_id)
     _note_opponent()
     game_log.start(start_fen=game.start_fen, mode=game.mode, opponent=_opponent_label(),
                    human_color="white" if game.human_color else "black",
-                   queen=_queen_settings())
+                   game_id=game.game_id, queen=_queen_settings())
     return state()
 
 
@@ -307,6 +330,8 @@ def change_opponent(req: OpponentIn):
 
 @app.post("/api/move")
 def make_move(req: MoveIn):
+    if game.over():
+        raise HTTPException(409, "The game is over")
     if game.engine_to_move():
         raise HTTPException(409, "It's the engine's turn")
     try:
@@ -329,7 +354,7 @@ async def engine_move():
     ok, why = await eng.available()
     if not ok:
         raise HTTPException(503, why)
-    before = game.board.copy()
+    board_now, before = game.board, game.board.copy()
     explanation = None
     try:
         if eng.can_explain:
@@ -345,6 +370,14 @@ async def engine_move():
     except Exception as e:  # surface engine errors to the UI
         game_log.event("engine_error", ply=len(before.move_stack) + 1, engine=eng.name, error=str(e))
         raise HTTPException(500, f"{eng.name} failed: {e}")
+    # The engine may have thought for minutes. If you started a new game, took a move
+    # back, or swapped opponents meanwhile, its move belongs to a position that's gone.
+    if (game.board is not board_now or game.board.fen() != before.fen()
+            or len(game.board.move_stack) != len(before.move_stack)
+            or game.engine_name != eng.name or not game.engine_to_move()):
+        game_log.event("engine_move_discarded", engine=eng.name, uci=mv.uci(),
+                       reason="the position changed while the engine was thinking")
+        raise HTTPException(409, "The position changed while the engine was thinking; its move was discarded")
     if mv not in game.board.legal_moves:
         game_log.event("engine_error", ply=len(before.move_stack) + 1, engine=eng.name,
                        error=f"illegal move {mv.uci()}")
@@ -360,7 +393,7 @@ def undo():
     """Hotseat: take back one ply. Engine mode: take back to the human's turn."""
     if not game.board.move_stack:
         return state()
-    was_over = game.board.is_game_over(claim_draw=True)
+    was_over = game.over()
     taken = [game.board.pop().uci()]
     if game.mode == "engine" and game.board.move_stack and game.board.turn != game.human_color:
         taken.insert(0, game.board.pop().uci())
@@ -380,14 +413,15 @@ async def analyze(req: AnalyzeIn):
     ok, why = await eng.available()
     if not ok:
         raise HTTPException(503, why)
-    if game.board.is_game_over():
+    if game.over():
         raise HTTPException(400, "Game is over")
+    board = game.board.copy()  # the position asked about, even if the game moves on meanwhile
     try:
-        a = await eng.analyze(game.board.copy(), req.question)
+        a = await eng.analyze(board.copy(), req.question)
     except Exception as e:
         raise HTTPException(500, f"{eng.name} failed: {e}")
-    payload = analysis_payload(game.board, a, eng.name)
-    game_log.event("analysis", ply=len(game.board.move_stack), fen=game.board.fen(),
+    payload = analysis_payload(board, a, eng.name)
+    game_log.event("analysis", ply=len(board.move_stack), fen=board.fen(),
                    engine=eng.name, question=req.question, response=payload)
     return payload
 

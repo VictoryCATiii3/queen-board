@@ -266,3 +266,46 @@ def test_save_games_off(monkeypatch):
     c.post("/api/new", json={"mode": "hotseat"})
     from server.app import game_log
     assert game_log.path is None
+
+
+def test_engine_move_discarded_if_position_changed_while_thinking(monkeypatch):
+    """A slow engine must never play its move into a different game."""
+    import server.app as app_mod
+    c.post("/api/new", json={"mode": "engine", "engine": "random", "human_color": "black"})
+    eng = app_mod.get_engine("random")
+
+    async def slow_move(board):
+        # Meanwhile, the user starts a new game (same start position, same side to move).
+        app_mod.new_game(app_mod.NewGame(mode="engine", engine="random", human_color="black"))
+        return chess.Move.from_uci("e2e4"), None   # legal there too: must still be rejected
+
+    monkeypatch.setattr(eng, "choose_move_detailed", slow_move)
+    r = c.post("/api/engine_move", json={})
+    assert r.status_code == 409 and "discarded" in r.json()["detail"]
+    assert c.get("/api/state").json()["history"] == []     # nothing was played
+
+
+def test_claimable_draw_ends_the_game_everywhere():
+    c.post("/api/new", json={"mode": "hotseat"})
+    for m in ["g1f3", "g8f6", "f3g1", "f6g8"] * 2:   # start position now seen 3 times
+        assert c.post("/api/move", json={"uci": m}).status_code == 200
+    s = c.get("/api/state").json()
+    assert s["outcome"]["winner"] is None and "repetition" in s["outcome"]["reason"]
+    assert s["legal"] == [] and "1/2-1/2" in s["pgn"]
+    assert c.post("/api/move", json={"uci": "g1f3"}).status_code == 409
+    s = c.post("/api/opponent", json={"mode": "engine", "engine": "random"}).json()
+    assert s["engine_to_move"] is False          # an engine won't play on past the draw
+
+
+def test_each_game_gets_its_own_queen_seed(fake_queen):
+    ids = []
+    for _ in range(2):
+        c.post("/api/new", json={"mode": "engine", "engine": "queen", "human_color": "black"})
+        c.post("/api/engine_move", json={})
+        c.post("/api/analyze", json={"engine": "queen"})
+        ids.append((fake_queen[-2]["game_id"], fake_queen[-1]["game_id"]))
+    (a1, a2), (b1, b2) = ids
+    assert a1 == a2 and b1 == b2 and a1 != b1 and a1 != 0   # same within a game, new per game
+    from server.app import game_log
+    start = json.loads(game_log.path.read_text().splitlines()[0])
+    assert start["game_id"] == b1

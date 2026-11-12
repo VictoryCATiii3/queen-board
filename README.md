@@ -29,7 +29,8 @@ Good luck.
   or fetches a private copy into this folder. On Linux it needs Python 3.10+ with venv
   (Ubuntu: `sudo apt install python3 python3-venv`).
 
-Tested on: Ubuntu with an RTX 3090, a Mac mini M4 (16 GB), and a Windows gaming laptop.
+Tested on: Ubuntu with an RTX 3090, a Mac mini M4 (16 GB), and a Windows gaming laptop
+(laptop GPU, `nf4`).
 
 ## Install and run
 
@@ -73,7 +74,7 @@ Each time it starts, the launcher checks your hardware and tells you what it pic
 | Your hardware | How QUEEN runs |
 |---|---|
 | NVIDIA GPU with 10 GB+ (RTX 3080, 3090, 4080, ...) | on the GPU, full size |
-| NVIDIA GPU with 5.5–10 GB (most laptop GPUs) | on the GPU, shrunk to 4-bit (`nf4`, experimental) |
+| NVIDIA GPU with 5.5–10 GB (most laptop GPUs) | on the GPU, shrunk to 4-bit (`nf4`) |
 | Apple Silicon Mac | on the Apple GPU |
 | anything else | on the CPU: works, but each QUEEN move can take many minutes |
 
@@ -117,6 +118,9 @@ location: `.venv\Scripts\queen.exe fetch` (Windows) or `.venv/bin/queen fetch`.
   analysis prompt, so it usually answers with its standard analysis anyway.
 - **Undo** takes back your last move and the engine's reply.
 - **Swap opponents mid-game** any time: the new one takes over the current position.
+- **New game** works even while QUEEN is still thinking; its unfinished move is discarded.
+- Games end automatically on checkmate, stalemate, insufficient material, threefold
+  repetition, or 50 moves without a capture or pawn move.
 - **Start from a position** accepts any FEN.
 
 QUEEN's moves are strong, but its explanations can contain mistakes even when the move
@@ -131,7 +135,7 @@ launcher again. Each setting is explained in the file.
 |---|---|---|
 | `cpu` | `false` | `true` = run QUEEN on the CPU. `false` = use the GPU when there's a suitable one |
 | `model` | `pawn-8` | `pawn-8` (stronger) or `hce-4` |
-| `quantize` | (auto) | `int8` or `nf4` to shrink QUEEN for smaller NVIDIA GPUs; picked automatically when needed |
+| `quantize` | (auto) | `int8` or `nf4` to shrink QUEEN for smaller NVIDIA GPUs; `nf4` is picked automatically when needed |
 | `download_folder` | Hugging Face default | Where the model downloads (e.g. an external drive) |
 | `model_folder` | | Use a QUEEN folder you've already downloaded |
 | `queen_url` | | Use QUEEN running on another computer (below) |
@@ -164,6 +168,9 @@ Every game is saved in **`games/`** as two files named by when it started:
   explanation of its moves, Stockfish's evaluation and planned line, every analysis you
   asked for along with your question, opponent swaps, undos, and the result.
 
+QUEEN picks its moves with a little randomness, seeded per game, so it doesn't replay the
+same game every time. The seed (`game_id`) is in each log, so any game can be reproduced.
+
 Set `save_games: false` to turn this off.
 
 ## Troubleshooting
@@ -175,7 +182,7 @@ Set `save_games: false` to turn this off.
 | "No usable NVIDIA GPU found" but you have one | Update your NVIDIA driver from nvidia.com, delete `.venv`, and run the launcher again |
 | Board doesn't start: port in use | Change `port` in the settings |
 | Stockfish missing from the opponent list | The download failed. macOS: `brew install stockfish`; Ubuntu: `sudo apt install stockfish`; or rerun the launcher |
-| Odd moves or garbled explanations on a laptop GPU | The shrunk `nf4` mode is experimental: set `cpu: true` |
+| Odd moves or garbled explanations on a laptop GPU | Try `cpu: true` to rule out the shrunk `nf4` mode |
 | Something else | Open an issue and paste the text from the launcher window |
 
 ## The `queen` command

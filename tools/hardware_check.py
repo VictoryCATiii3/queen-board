@@ -86,8 +86,8 @@ def decide(env: dict, gpu: tuple[str, float] | None, ram_gb: float | None,
             out["QUEEN_QUANTIZE"] = "nf4"
             quantize = "nf4"
             msgs.append(f"GPU: {name} has {vram:.0f} GB, less than the ~{FULL_GB:.0f} GB QUEEN needs at full "
-                        "size, so it will run shrunk to 4-bit (nf4). This is experimental: if moves or "
-                        "explanations look broken, set cpu: true in setup/settings.yaml.")
+                        "size, so it will run shrunk to 4-bit (nf4). If anything looks off, set "
+                        "cpu: true in setup/settings.yaml.")
         else:
             out["QUEEN_DEVICE"] = "cpu"
             device = "cpu"

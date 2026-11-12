@@ -78,7 +78,10 @@ class StockfishEngine(Engine):
 
     async def stop(self) -> None:
         if self._engine:
-            await self._engine.quit()
+            try:
+                await self._engine.quit()
+            except Exception:
+                pass  # already gone
         self._engine = None
 
     async def set_skill(self, level: int) -> None:
@@ -89,11 +92,22 @@ class StockfishEngine(Engine):
     async def choose_move(self, board: chess.Board) -> chess.Move:
         return (await self.choose_move_detailed(board))[0]
 
+    async def _call(self, fn):
+        """Run fn(engine), restarting Stockfish once if its process has died."""
+        for attempt in (1, 2):
+            await self.start()
+            assert self._engine
+            try:
+                return await fn(self._engine)
+            except (chess.engine.EngineTerminatedError, BrokenPipeError, ConnectionError):
+                self._engine = None  # dead process: start a fresh one next time
+                if attempt == 2:
+                    raise
+
     async def choose_move_detailed(self, board: chess.Board) -> tuple[chess.Move, dict | None]:
-        await self.start()
-        assert self._engine
-        result = await self._engine.play(board, chess.engine.Limit(time=self.think_time),
-                                         info=chess.engine.INFO_SCORE | chess.engine.INFO_PV)
+        result = await self._call(lambda e: e.play(
+            board, chess.engine.Limit(time=self.think_time),
+            info=chess.engine.INFO_SCORE | chess.engine.INFO_PV))
         info = result.info or {}
         details: dict = {"skill_level": self.skill_level, "think_time": self.think_time,
                          "depth": info.get("depth"), "nodes": info.get("nodes")}
@@ -107,9 +121,7 @@ class StockfishEngine(Engine):
         return result.move, details
 
     async def analyze(self, board: chess.Board, question: str | None = None) -> Analysis:
-        await self.start()
-        assert self._engine
-        info = await self._engine.analyse(board, chess.engine.Limit(time=self.think_time))
+        info = await self._call(lambda e: e.analyse(board, chess.engine.Limit(time=self.think_time)))
         score = info.get("score")
         pv = [m.uci() for m in info.get("pv", [])]
         a = Analysis(best_move=pv[0] if pv else None, line=pv)

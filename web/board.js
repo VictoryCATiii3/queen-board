@@ -14,6 +14,7 @@ let flipped = false;
 let selected = null;     // square name, e.g. "e2"
 let arrows = [];         // [{from, to, alpha}]
 let busy = false;
+let gen = 0;             // bumps on New game / Undo; engine replies from an older game are ignored
 let drag = null;         // {from, ghost, pieceEl}
 
 // ---------- helpers ----------
@@ -50,7 +51,7 @@ async function api(path, body) {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   });
   const d = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(d.detail || r.statusText);
+  if (!r.ok) { const e = new Error(d.detail || r.statusText); e.status = r.status; throw e; }
   return d;
 }
 
@@ -124,7 +125,7 @@ function renderPanel() {
   const status = $("status");
   status.classList.toggle("thinking", busy);
   if (st.result) status.textContent = st.result;
-  else if (busy) status.textContent = `${st.engine} is thinking`;
+  else if (busy) status.textContent = `${engineLabel(st)} is thinking`;
   else {
     const side = st.turn === "white" ? "White" : "Black";
     status.textContent = `${side} to move` + (st.check ? " — check!" : "");
@@ -289,9 +290,19 @@ async function sendMove(uci) {
 
 async function maybeEngineMove() {
   if (!st.engine_to_move) return;
+  const mine = gen;
   busy = true; renderPanel();
-  try { const s = await api("engine_move", {}); busy = false; update(s); }
-  catch (e) { busy = false; renderPanel(); $("status").textContent = "Engine error: " + e.message; }
+  try {
+    const s = await api("engine_move", {});
+    if (mine !== gen) return;          // a new game started while it was thinking
+    busy = false; update(s);
+  } catch (e) {
+    if (mine !== gen) return;
+    busy = false;
+    // 409: the position changed while it thought (its move was discarded). Not an error.
+    if (e.status === 409) { update(await api("state")); return maybeEngineMove(); }
+    renderPanel(); $("status").textContent = "Engine error: " + e.message;
+  }
 }
 
 // ---------- controls ----------
@@ -344,15 +355,19 @@ async function startNewGame() {
   try {
     if (opp === "stockfish") await api("stockfish/skill", { level: +$("skill").value });
     flipped = opp !== "hotseat" && $("color").value === "black";
+    gen++; busy = false;   // New game works even while an engine is thinking (QUEEN on a CPU is slow)
     update(await api("new", body));
     clearAnalysis();
     await maybeEngineMove();
   } catch (e) { $("status").textContent = "Couldn't start: " + e.message; }
 }
-$("undo").onclick = async () => { resultSeen = null; update(await api("undo", {})); };
+$("undo").onclick = async () => { resultSeen = null; gen++; update(await api("undo", {})); };
 $("flip").onclick = () => { flipped = !flipped; draw(); renderPanel(); };
-$("copy-pgn").onclick = () => navigator.clipboard.writeText(st.pgn);
-$("copy-fen").onclick = () => navigator.clipboard.writeText(st.fen);
+// The clipboard API only works on 127.0.0.1/https; on a LAN address, show the text to copy.
+const copy = (text) => (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject())
+  .catch(() => window.prompt("Copy this:", text));
+$("copy-pgn").onclick = () => copy(st.pgn);
+$("copy-fen").onclick = () => copy(st.fen);
 
 function clearAnalysis() {
   const box = $("analysis"); box.className = "analysis empty";

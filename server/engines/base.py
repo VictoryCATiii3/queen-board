@@ -56,6 +56,9 @@ class Engine:
         """(ok, reason). Lets the UI grey out engines that aren't installed."""
         return True, ""
 
+    def new_game(self, game_id: int) -> None:
+        """Called when a game starts. game_id is random per game and saved in the game log."""
+
     async def choose_move(self, board: chess.Board) -> chess.Move:
         analysis = await self.analyze(board)
         if not analysis.best_move:
