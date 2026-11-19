@@ -15,6 +15,12 @@ Good luck.
 > - Models: [princeton-nlp/queen_pawn-8](https://huggingface.co/princeton-nlp/queen_pawn-8) ·
 >   [princeton-nlp/queen_hce-4](https://huggingface.co/princeton-nlp/queen_hce-4)
 
+**Video tutorial:** [Run QUEEN locally on Windows, Mac and Linux](https://youtu.be/GVUGpZRkUSk?si=ZJCC4mnXkYrV3IK_)
+
+**4-bit NF4 plays as well as full precision.** Over 224 games per version against Stockfish,
+NF4 rated 2665 (95% CI 2600–2729) vs 2662 (2597–2726) for BF16, using 3.1 GB of weights
+instead of 5.7 GB. Full report: [queen-nf4-eval](https://github.com/VictoryCATiii3/queen-nf4-eval)
+
 ## What you need
 
 | | Works well | Works, slowly |
